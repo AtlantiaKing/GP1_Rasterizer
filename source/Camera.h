@@ -24,9 +24,9 @@ namespace dae
 		float fovAngle{90.f};
 		float fov{ tanf((fovAngle * TO_RADIANS) / 2.f) };
 
-		Vector3 forward{Vector3::UnitZ};
-		Vector3 up{Vector3::UnitY};
-		Vector3 right{Vector3::UnitX};
+		Vector3 forward{ Vector3::UnitZ };
+		Vector3 up{ Vector3::UnitY };
+		Vector3 right{ Vector3::UnitX };
 
 		float totalPitch{};
 		float totalYaw{};
@@ -87,7 +87,7 @@ namespace dae
 			const float minFov{ 30.0f };
 			const float maxFov{ 170.0f };
 			const float mouseMovementSpeed{ 2.0f };
-			const float angularSpeed{ 10.0f * TO_RADIANS };
+			const float angularSpeed{ 50.0f * TO_RADIANS };
 
 			// The total movement of this frame
 			Vector3 direction{};

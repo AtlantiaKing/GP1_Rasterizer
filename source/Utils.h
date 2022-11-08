@@ -173,32 +173,4 @@ namespace dae
 		}
 #pragma warning(pop)
 	}
-
-	namespace RasterSpaceUtils
-	{
-		inline bool IsToRightSideOfEdge(const Vector2& point, const Vector2& v0, const Vector2& v1)
-		{
-			// Calculate the current edge
-			const Vector2 edge{ v1 - v0 };
-
-			// Calculate the vector between the first vertex and the point
-			const Vector2 startToPoint{ point - v0 };
-
-			// Calculate cross product from edge to start to point
-			const float edgePointCross{ Vector2::Cross(edge, startToPoint) };
-
-			// The point is to the right side of the edge if the cross product and the normal of the triangle are in the same direction (cos(angle) > 0)
-			return edgePointCross > 0;
-		}
-
-		inline bool IsInTriangle(const Vector2& point, const Vector2& v0, const Vector2& v1, const Vector2& v2)
-		{
-			if (!(IsToRightSideOfEdge(point, v0, v1)
-				&& IsToRightSideOfEdge(point, v1, v2)
-				&& IsToRightSideOfEdge(point, v2, v0)))
-			{
-				return false;
-			}
-		}
-	}
 }

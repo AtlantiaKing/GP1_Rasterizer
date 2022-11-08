@@ -49,9 +49,9 @@ void Renderer::Render()
 	// Create a vector of vertices in world space
 	std::vector<Vertex> verticesWorld
 	{
-		{ { 0.0f, 2.0f, 0.0f } },
-		{ { 1.0f, 0.0f, 0.0f } },
-		{ { -1.0f, 0.0f, 0.0f } }
+		{ { 0.0f, 4.0f, 2.0f }, { 1.0f, 0.0f, 0.0f } },
+		{ { 3.0f, -2.0f, 2.0f }, { 0.0f, 1.0f, 0.0f } },
+		{ { -3.0f, -2.0f, 2.0f }, { 0.0f, 0.0f, 1.0f } }
 	};
 
 	// Create a vector for all the vertices in NDC space
@@ -75,26 +75,62 @@ void Renderer::Render()
 
 	//RENDER LOGIC
 
-	// For each pixel
-	for (int px{}; px < m_Width; ++px)
+	// For each triangle
+	for (int curStartVertexIdx{}; curStartVertexIdx < verticesWorld.size(); curStartVertexIdx += 3)
 	{
-		for (int py{}; py < m_Height; ++py)
+	// For each pixel
+		for (int px{}; px < m_Width; ++px)
 		{
-			// Create a Vector2 of the current pixel
-			Vector2 curPixel{ static_cast<float>(px), static_cast<float>(py) };
+			for (int py{}; py < m_Height; ++py)
+			{
+				ColorRGB finalColor{};
 
-			// Set the final color to white if the current pixel is inside the triangle
-			ColorRGB finalColor{ RasterSpaceUtils::IsInTriangle(curPixel, verticesRaster[0], verticesRaster[1], verticesRaster[2])
-									? ColorRGB{ 1.0f, 1.0f, 1.0f }
-									: ColorRGB{} };
+				// Create a Vector2 of the current pixel
+				const Vector2 curPixel{ static_cast<float>(px), static_cast<float>(py) };
 
-			//Update Color in Buffer
-			finalColor.MaxToOne();
+				// Calculate the edges of the current triangle
+				const Vector2 edge01{ verticesRaster[curStartVertexIdx + 1] - verticesRaster[curStartVertexIdx + 0] };
+				const Vector2 edge12{ verticesRaster[curStartVertexIdx + 2] - verticesRaster[curStartVertexIdx + 1] };
+				const Vector2 edge20{ verticesRaster[curStartVertexIdx + 0] - verticesRaster[curStartVertexIdx + 2] };
 
-			m_pBackBufferPixels[px + (py * m_Width)] = SDL_MapRGB(m_pBackBuffer->format,
-				static_cast<uint8_t>(finalColor.r * 255),
-				static_cast<uint8_t>(finalColor.g * 255),
-				static_cast<uint8_t>(finalColor.b * 255));
+				// Calculate the vector between the first vertex and the point
+				const Vector2 v0ToPoint{ curPixel - verticesRaster[curStartVertexIdx + 0] };
+				const Vector2 v1ToPoint{ curPixel - verticesRaster[curStartVertexIdx + 1] };
+				const Vector2 v2ToPoint{ curPixel - verticesRaster[curStartVertexIdx + 2] };
+
+				// Calculate cross product from edge to start to point
+				const float edge01PointCross{ Vector2::Cross(edge01, v0ToPoint) };
+				const float edge12PointCross{ Vector2::Cross(edge12, v1ToPoint) };
+				const float edge20PointCross{ Vector2::Cross(edge20, v2ToPoint) };
+
+				// Check if pixel is inside triangle, if not continue to the next pixel
+				if (edge01PointCross > 0 && edge12PointCross > 0 && edge20PointCross > 0)
+				{
+					// Calculate the area of the current triangle
+					const float fullTriangleArea{ Vector2::Cross(edge01, edge12) };
+
+					// Calculate the barycentric weights
+					const float weightV0{ edge12PointCross / fullTriangleArea };
+					const float weightV1{ edge20PointCross / fullTriangleArea };
+					const float weightV2{ edge01PointCross / fullTriangleArea };
+
+					// Set the final color to white if the current pixel is inside the triangle
+					finalColor = 
+					{
+						weightV0 * verticesWorld[curStartVertexIdx + 0].color +
+						weightV1 * verticesWorld[curStartVertexIdx + 1].color +
+						weightV2 * verticesWorld[curStartVertexIdx + 2].color
+					};
+				}
+
+				//Update Color in Buffer
+				finalColor.MaxToOne();
+
+				m_pBackBufferPixels[px + (py * m_Width)] = SDL_MapRGB(m_pBackBuffer->format,
+					static_cast<uint8_t>(finalColor.r * 255),
+					static_cast<uint8_t>(finalColor.g * 255),
+					static_cast<uint8_t>(finalColor.b * 255));
+			}
 		}
 	}
 

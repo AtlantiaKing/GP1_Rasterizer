@@ -44,16 +44,34 @@ void Renderer::Render()
 	//Lock BackBuffer
 	SDL_LockSurface(m_pBackBuffer);
 
+	std::vector<Vector3> verticesNDC
+	{
+		{ 0.0f, 0.5f, 1.0f },
+		{ 0.5f, -0.5f, 1.0f },
+		{ -0.5f, -0.5f, 1.0f }
+	};
+
+	std::vector<Vector2> verticesRaster{};
+
+	for (const Vector3& ndcVertec : verticesNDC)
+	{
+		verticesRaster.push_back(
+		{
+				(ndcVertec.x + 1) / 2.0f * m_Width,
+				(1.0f - ndcVertec.y) / 2.0f * m_Height
+			});
+	}
+
 	//RENDER LOGIC
 	for (int px{}; px < m_Width; ++px)
 	{
 		for (int py{}; py < m_Height; ++py)
 		{
-			float gradient = px / static_cast<float>(m_Width);
-			gradient += py / static_cast<float>(m_Width);
-			gradient /= 2.0f;
+			Vector2 curPixel{ static_cast<float>(px), static_cast<float>(py) };
 
-			ColorRGB finalColor{ gradient, gradient, gradient };
+			ColorRGB finalColor{ RasterSpaceUtils::IsInTriangle(curPixel, verticesRaster[0], verticesRaster[1], verticesRaster[2])
+									? ColorRGB{ 1.0f, 1.0f, 1.0f }
+									: ColorRGB{} };
 
 			//Update Color in Buffer
 			finalColor.MaxToOne();

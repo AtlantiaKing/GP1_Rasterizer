@@ -17,6 +17,8 @@ Renderer::Renderer(SDL_Window* pWindow) :
 	//Initialize
 	SDL_GetWindowSize(pWindow, &m_Width, &m_Height);
 
+	m_AspectRatio = static_cast<float>(m_Width) / m_Height;
+
 	//Create Buffers
 	m_pFrontBuffer = SDL_GetWindowSurface(pWindow);
 	m_pBackBuffer = SDL_CreateRGBSurface(0, m_Width, m_Height, 32, 0, 0, 0, 0);
@@ -44,31 +46,44 @@ void Renderer::Render()
 	//Lock BackBuffer
 	SDL_LockSurface(m_pBackBuffer);
 
-	std::vector<Vector3> verticesNDC
+	// Create a vector of vertices in world space
+	std::vector<Vertex> verticesWorld
 	{
-		{ 0.0f, 0.5f, 1.0f },
-		{ 0.5f, -0.5f, 1.0f },
-		{ -0.5f, -0.5f, 1.0f }
+		{ { 0.0f, 2.0f, 0.0f } },
+		{ { 1.0f, 0.0f, 0.0f } },
+		{ { -1.0f, 0.0f, 0.0f } }
 	};
 
+	// Create a vector for all the vertices in NDC space
+	std::vector<Vertex> verticesNDC{};
+
+	// Convert all the vertices from world space to NDC space
+	VertexTransformationFunction(verticesWorld, verticesNDC);
+
+	// Create a vector for all the vertices in raster space
 	std::vector<Vector2> verticesRaster{};
 
-	for (const Vector3& ndcVertec : verticesNDC)
+	// Convert all the vertices from NDC space to raster space
+	for (const Vertex& ndcVertec : verticesNDC)
 	{
 		verticesRaster.push_back(
-		{
-				(ndcVertec.x + 1) / 2.0f * m_Width,
-				(1.0f - ndcVertec.y) / 2.0f * m_Height
+			{
+					(ndcVertec.position.x + 1) / 2.0f * m_Width,
+				(1.0f - ndcVertec.position.y) / 2.0f * m_Height
 			});
 	}
 
 	//RENDER LOGIC
+
+	// For each pixel
 	for (int px{}; px < m_Width; ++px)
 	{
 		for (int py{}; py < m_Height; ++py)
 		{
+			// Create a Vector2 of the current pixel
 			Vector2 curPixel{ static_cast<float>(px), static_cast<float>(py) };
 
+			// Set the final color to white if the current pixel is inside the triangle
 			ColorRGB finalColor{ RasterSpaceUtils::IsInTriangle(curPixel, verticesRaster[0], verticesRaster[1], verticesRaster[2])
 									? ColorRGB{ 1.0f, 1.0f, 1.0f }
 									: ColorRGB{} };
@@ -92,7 +107,22 @@ void Renderer::Render()
 
 void Renderer::VertexTransformationFunction(const std::vector<Vertex>& vertices_in, std::vector<Vertex>& vertices_out) const
 {
-	//Todo > W1 Projection Stage
+	// Reserve the amount of vertices into the new vertex list
+	vertices_out.reserve(vertices_in.size());
+
+	// For each vertex in the world vertices
+	for (Vertex vertex : vertices_in)
+	{
+		// Tranform the vertex using the inversed view matrix
+		vertex.position = m_Camera.invViewMatrix.TransformPoint(vertex.position);
+		
+		// Apply the perspective divide
+		vertex.position.x = vertex.position.x / (m_AspectRatio * m_Camera.fov) / vertex.position.z;
+		vertex.position.y = vertex.position.y / m_Camera.fov /  vertex.position.z;
+
+		// Add the new vertex to the list of NDC vertices
+		vertices_out.emplace_back(vertex);
+	}
 }
 
 bool Renderer::SaveBufferToImage() const

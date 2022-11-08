@@ -84,12 +84,26 @@ void Renderer::Render()
 			});
 	}
 
-	//RENDER LOGIC
-
 	// For each triangle
 	for (int curStartVertexIdx{}; curStartVertexIdx < verticesWorld.size(); curStartVertexIdx += 3)
 	{
-	// For each pixel
+		// Get the current vertices
+		const Vector2 v0{ verticesRaster[curStartVertexIdx + 0] };
+		const Vector2 v1{ verticesRaster[curStartVertexIdx + 1] };
+		const Vector2 v2{ verticesRaster[curStartVertexIdx + 2] };
+
+		// Calculate the edges of the current triangle
+		const Vector2 edge01{ v1 - v0 };
+		const Vector2 edge12{ v2 - v1 };
+		const Vector2 edge20{ v0 - v2 };
+
+		// Calculate the area of the current triangle
+		const float fullTriangleArea{ Vector2::Cross(edge01, edge12) };
+
+		Vector2 minBoundingBox{ Vector2::Min(v0, Vector2::Min(v1, v2)) };
+		Vector2 maxBoundingBox{ Vector2::Max(v0, Vector2::Max(v1, v2)) };
+		
+		// For each pixel
 		for (int px{}; px < m_Width; ++px)
 		{
 			for (int py{}; py < m_Height; ++py)
@@ -98,15 +112,12 @@ void Renderer::Render()
 				const int pixelIdx{ px + py * m_Width };
 				const Vector2 curPixel{ static_cast<float>(px), static_cast<float>(py) };
 
-				// Calculate the edges of the current triangle
-				const Vector2 edge01{ verticesRaster[curStartVertexIdx + 1] - verticesRaster[curStartVertexIdx + 0] };
-				const Vector2 edge12{ verticesRaster[curStartVertexIdx + 2] - verticesRaster[curStartVertexIdx + 1] };
-				const Vector2 edge20{ verticesRaster[curStartVertexIdx + 0] - verticesRaster[curStartVertexIdx + 2] };
+				if (curPixel.x < minBoundingBox.x || curPixel.x > maxBoundingBox.x || curPixel.y < minBoundingBox.y || curPixel.y > maxBoundingBox.y) continue;
 
 				// Calculate the vector between the first vertex and the point
-				const Vector2 v0ToPoint{ curPixel - verticesRaster[curStartVertexIdx + 0] };
-				const Vector2 v1ToPoint{ curPixel - verticesRaster[curStartVertexIdx + 1] };
-				const Vector2 v2ToPoint{ curPixel - verticesRaster[curStartVertexIdx + 2] };
+				const Vector2 v0ToPoint{ curPixel - v0 };
+				const Vector2 v1ToPoint{ curPixel - v1 };
+				const Vector2 v2ToPoint{ curPixel - v2 };
 
 				// Calculate cross product from edge to start to point
 				const float edge01PointCross{ Vector2::Cross(edge01, v0ToPoint) };
@@ -115,8 +126,6 @@ void Renderer::Render()
 
 				// Check if pixel is inside triangle, if not continue to the next pixel
 				if (!(edge01PointCross > 0 && edge12PointCross > 0 && edge20PointCross > 0)) continue;
-				// Calculate the area of the current triangle
-				const float fullTriangleArea{ Vector2::Cross(edge01, edge12) };
 
 				// Calculate the barycentric weights
 				const float weightV0{ edge12PointCross / fullTriangleArea };

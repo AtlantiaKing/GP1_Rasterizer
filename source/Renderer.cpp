@@ -148,9 +148,9 @@ void Renderer::VertexTransformationFunction(const std::vector<Vertex>& vertices_
 void dae::Renderer::RenderTriangle(const Mesh& mesh, const std::vector<Vector2>& rasterVertices, const std::vector<Vertex>& ndcVertices, int curVertexIdx, bool swapVertices)
 {
 	// Calcalate the indexes of the vertices on this triangle
-	const uint32_t vertexIdx0{ mesh.indices[curVertexIdx + 0 * !swapVertices + 2 * swapVertices] };
-	const uint32_t vertexIdx1{ mesh.indices[curVertexIdx + 1] };
-	const uint32_t vertexIdx2{ mesh.indices[curVertexIdx + 2 * !swapVertices + 0 * swapVertices] };
+	const uint32_t vertexIdx0{ mesh.indices[curVertexIdx] };
+	const uint32_t vertexIdx1{ mesh.indices[curVertexIdx + 1 * !swapVertices + 2 * swapVertices] };
+	const uint32_t vertexIdx2{ mesh.indices[curVertexIdx + 2 * !swapVertices + 1 * swapVertices] };
 
 	// If a triangle has the same vertex twice, continue to the next triangle
 	if (vertexIdx0 == vertexIdx1 || vertexIdx1 == vertexIdx2 || vertexIdx0 == vertexIdx2) return;
@@ -209,31 +209,31 @@ void dae::Renderer::RenderTriangle(const Mesh& mesh, const std::vector<Vector2>&
 			const float weightV2{ edge01PointCross / fullTriangleArea };
 
 			const float depthV0{ (ndcVertices[vertexIdx0].position.z) };
-			const float v1Depth{ (ndcVertices[vertexIdx1].position.z) };
-			const float v2Depth{ (ndcVertices[vertexIdx2].position.z) };
+			const float depthV1{ (ndcVertices[vertexIdx1].position.z) };
+			const float depthV2{ (ndcVertices[vertexIdx2].position.z) };
 
 			// Calculate the depth at this pixel
 			const float interpolatedDepth
 			{
 				1.0f /
 					(weightV0 * 1.0f / depthV0 +
-					weightV1 * 1.0f / v1Depth +
-					weightV2 * 1.0f / v2Depth)
+					weightV1 * 1.0f / depthV1 +
+					weightV2 * 1.0f / depthV2)
 			};
 
 			// If this pixel hit is further away then a previous pixel hit, continue to the next pixel
 			if (m_pDepthBufferPixels[pixelIdx] < interpolatedDepth) continue;
 
-			// Save the new depth
-			m_pDepthBufferPixels[pixelIdx] = interpolatedDepth;
-
 			const Vector2 curPixelUV
 			{
 				(weightV0 * mesh.vertices[vertexIdx0].uv / depthV0 +
-				weightV1 * mesh.vertices[vertexIdx1].uv / v1Depth +
-				weightV2 * mesh.vertices[vertexIdx2].uv / v2Depth)
+				weightV1 * mesh.vertices[vertexIdx1].uv / depthV1 +
+				weightV2 * mesh.vertices[vertexIdx2].uv / depthV2)
 					* interpolatedDepth
 			};
+
+			// Save the new depth
+			m_pDepthBufferPixels[pixelIdx] = interpolatedDepth;
 
 			// Set the final color to white if the current pixel is inside the triangle
 			ColorRGB finalColor{ m_pTexture->Sample(curPixelUV) };

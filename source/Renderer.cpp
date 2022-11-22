@@ -54,19 +54,19 @@ void Renderer::Render()
 	SDL_LockSurface(m_pBackBuffer);
 
 	// Create a vector of meshes
-	const std::vector<Mesh> meshesWorld
+	std::vector<Mesh> meshesWorld
 	{
 		Mesh{
 			{
-				Vertex{{ -3.f, 3.f, -2.f }, { 0.0f, 0.0f }},
-				Vertex{{ 0.f, 3.f, -2.f }, { 0.5f, 0.0f }},
-				Vertex{{ 3.f, 3.f, -2.f }, { 1.0f, 0.0f }},
-				Vertex{{ -3.f, 0.f, -2.f }, { 0.0f, 0.5f }},
-				Vertex{{ 0.f, 0.f, -2.f }, { 0.5f, 0.5f }},
-				Vertex{{ 3.f, 0.f, -2.f }, { 1.0f, 0.5f }},
-				Vertex{{ -3.f, -3.f, -2.f }, { 0.0f, 1.0f }},
-				Vertex{{ 0.f, -3.f, -2.f }, { 0.5f, 1.0f }},
-				Vertex{{ 3.f, -3.f, -2.f }, { 1.0f, 1.0f }},
+				Vertex{{ -3.f, 3.f, -2.f }, {}, { 0.0f, 0.0f }},
+				Vertex{{ 0.f, 3.f, -2.f }, {}, { 0.5f, 0.0f }},
+				Vertex{{ 3.f, 3.f, -2.f }, {}, { 1.0f, 0.0f }},
+				Vertex{{ -3.f, 0.f, -2.f },  {}, { 0.0f, 0.5f }},
+				Vertex{{ 0.f, 0.f, -2.f }, {}, { 0.5f, 0.5f }},
+				Vertex{{ 3.f, 0.f, -2.f }, {}, { 1.0f, 0.5f }},
+				Vertex{{ -3.f, -3.f, -2.f }, {}, { 0.0f, 1.0f }},
+				Vertex{{ 0.f, -3.f, -2.f }, {}, { 0.5f, 1.0f }},
+				Vertex{{ 3.f, -3.f, -2.f }, {}, { 1.0f, 1.0f }},
 			},
 			{
 				3,0,4,1,5,2,
@@ -77,19 +77,16 @@ void Renderer::Render()
 		}
 	};
 
-	for (const Mesh& mesh : meshesWorld)
+	for (Mesh& mesh : meshesWorld)
 	{
-		// Create a vector for all the vertices in NDC space
-		std::vector<Vertex> verticesNDC{};
-
 		// Convert all the vertices from world space to NDC space
-		VertexTransformationFunction(mesh.vertices, verticesNDC);
+		VertexTransformationFunction(mesh.vertices, mesh.vertices_out);
 
 		// Create a vector for all the vertices in raster space
 		std::vector<Vector2> verticesRaster{};
 
 		// Convert all the vertices from NDC space to raster space
-		for (const Vertex& ndcVertec : verticesNDC)
+		for (const Vertex_Out& ndcVertec : mesh.vertices_out)
 		{
 			verticesRaster.push_back(
 				{
@@ -105,14 +102,14 @@ void Renderer::Render()
 			// For each triangle
 			for (int curStartVertexIdx{}; curStartVertexIdx < mesh.indices.size(); curStartVertexIdx += 3)
 			{
-				RenderTriangle(mesh, verticesRaster, verticesNDC, curStartVertexIdx, false);
+				RenderTriangle(mesh, verticesRaster, curStartVertexIdx, false);
 			}
 			break;
 		case PrimitiveTopology::TriangleStrip:
 			// For each triangle
 			for (int curStartVertexIdx{}; curStartVertexIdx < mesh.indices.size() - 2; ++curStartVertexIdx)
 			{
-				RenderTriangle(mesh, verticesRaster, verticesNDC, curStartVertexIdx, curStartVertexIdx % 2);
+				RenderTriangle(mesh, verticesRaster, curStartVertexIdx, curStartVertexIdx % 2);
 			}
 			break;
 		}
@@ -125,27 +122,27 @@ void Renderer::Render()
 	SDL_UpdateWindowSurface(m_pWindow);
 }
 
-void Renderer::VertexTransformationFunction(const std::vector<Vertex>& vertices_in, std::vector<Vertex>& vertices_out) const
+void Renderer::VertexTransformationFunction(const std::vector<Vertex>& vertices_in, std::vector<Vertex_Out>& vertices_out) const
 {
 	// Reserve the amount of vertices into the new vertex list
 	vertices_out.reserve(vertices_in.size());
 
 	// For each vertex in the world vertices
-	for (Vertex vertex : vertices_in)
+	for (const Vertex& vertex : vertices_in)
 	{
 		// Tranform the vertex using the inversed view matrix
-		vertex.position = m_Camera.invViewMatrix.TransformPoint(vertex.position);
+		Vector4 outPosition{ m_Camera.invViewMatrix.TransformPoint(vertex.position), 0.0f };
 		
 		// Apply the perspective divide
-		vertex.position.x = vertex.position.x / (m_AspectRatio * m_Camera.fov) / vertex.position.z;
-		vertex.position.y = vertex.position.y / m_Camera.fov /  vertex.position.z;
+		outPosition.x = outPosition.x / (m_AspectRatio * m_Camera.fov) / outPosition.z;
+		outPosition.y = outPosition.y / m_Camera.fov / outPosition.z;
 
 		// Add the new vertex to the list of NDC vertices
-		vertices_out.emplace_back(vertex);
+		vertices_out.emplace_back(outPosition);
 	}
 }
 
-void dae::Renderer::RenderTriangle(const Mesh& mesh, const std::vector<Vector2>& rasterVertices, const std::vector<Vertex>& ndcVertices, int curVertexIdx, bool swapVertices)
+void dae::Renderer::RenderTriangle(const Mesh& mesh, const std::vector<Vector2>& rasterVertices, int curVertexIdx, bool swapVertices)
 {
 	// Calcalate the indexes of the vertices on this triangle
 	const uint32_t vertexIdx0{ mesh.indices[curVertexIdx] };
@@ -201,24 +198,24 @@ void dae::Renderer::RenderTriangle(const Mesh& mesh, const std::vector<Vector2>&
 			const float edge20PointCross{ Vector2::Cross(edge20, v2ToPoint) };
 
 			// Check if pixel is inside triangle, if not continue to the next pixel
-			if (!(edge01PointCross > 0 && edge12PointCross > 0 && edge20PointCross > 0)) continue;
+			if (!(edge01PointCross >= 0 && edge12PointCross >= 0 && edge20PointCross >= 0)) continue;
 
 			// Calculate the barycentric weights
 			const float weightV0{ edge12PointCross / fullTriangleArea };
 			const float weightV1{ edge20PointCross / fullTriangleArea };
 			const float weightV2{ edge01PointCross / fullTriangleArea };
 
-			const float depthV0{ (ndcVertices[vertexIdx0].position.z) };
-			const float depthV1{ (ndcVertices[vertexIdx1].position.z) };
-			const float depthV2{ (ndcVertices[vertexIdx2].position.z) };
+			const float depthV0{ (mesh.vertices_out[vertexIdx0].position.z) };
+			const float depthV1{ (mesh.vertices_out[vertexIdx1].position.z) };
+			const float depthV2{ (mesh.vertices_out[vertexIdx2].position.z) };
 
 			// Calculate the depth at this pixel
 			const float interpolatedDepth
 			{
 				1.0f /
-					(weightV0 * 1.0f / depthV0 +
-					weightV1 * 1.0f / depthV1 +
-					weightV2 * 1.0f / depthV2)
+					(weightV0 / depthV0 +
+					weightV1 / depthV1 +
+					weightV2 / depthV2)
 			};
 
 			// If this pixel hit is further away then a previous pixel hit, continue to the next pixel

@@ -14,12 +14,10 @@ using namespace dae;
 
 Renderer::Renderer(SDL_Window* pWindow) 
 	: m_pWindow(pWindow)
-	, m_pTexture{ Texture::LoadFromFile("Resources/uv_grid_2.png") }
+	, m_pTexture{ Texture::LoadFromFile("Resources/tuktuk.png") }
 {
 	//Initialize
 	SDL_GetWindowSize(pWindow, &m_Width, &m_Height);
-
-	m_AspectRatio = static_cast<float>(m_Width) / m_Height;
 
 	//Create Buffers
 	m_pFrontBuffer = SDL_GetWindowSurface(pWindow);
@@ -30,7 +28,9 @@ Renderer::Renderer(SDL_Window* pWindow)
 	ResetDepthBuffer();
 
 	//Initialize Camera
-	m_Camera.Initialize(60.f, { .0f,.0f,-10.f });
+	m_Camera.Initialize(60.f, { .0f,.0f,-10.f }, static_cast<float>(m_Width) / m_Height);
+
+	InitMesh();
 }
 
 Renderer::~Renderer()
@@ -41,78 +41,60 @@ Renderer::~Renderer()
 
 void Renderer::Update(Timer* pTimer)
 {
+	// Update the camera
 	m_Camera.Update(pTimer);
+
+	// Rotate the mesh
+	const float meshRotationPerSecond{ 50.0f };
+	m_Mesh.RotateY(meshRotationPerSecond * pTimer->GetElapsed());
 }
 
 void Renderer::Render()
 {
 	//@START
+
+	// Reset the depth buffer
 	ResetDepthBuffer();
+
+	// Paint the canvas black
 	ClearBackground();
 
 	//Lock BackBuffer
 	SDL_LockSurface(m_pBackBuffer);
 
-	// Create a vector of meshes
-	std::vector<Mesh> meshesWorld
+	// Convert all the vertices in the mesh from world space to NDC space
+	VertexTransformationFunction();
+
+	// Create a vector for all the vertices in raster space
+	std::vector<Vector2> verticesRaster{};
+
+	// Convert all the vertices from NDC space to raster space
+	for (const Vertex_Out& ndcVertec : m_Mesh.vertices_out)
 	{
-		Mesh{
+		verticesRaster.push_back(
 			{
-				Vertex{{ -3.f, 3.f, -2.f }, {}, { 0.0f, 0.0f }},
-				Vertex{{ 0.f, 3.f, -2.f }, {}, { 0.5f, 0.0f }},
-				Vertex{{ 3.f, 3.f, -2.f }, {}, { 1.0f, 0.0f }},
-				Vertex{{ -3.f, 0.f, -2.f },  {}, { 0.0f, 0.5f }},
-				Vertex{{ 0.f, 0.f, -2.f }, {}, { 0.5f, 0.5f }},
-				Vertex{{ 3.f, 0.f, -2.f }, {}, { 1.0f, 0.5f }},
-				Vertex{{ -3.f, -3.f, -2.f }, {}, { 0.0f, 1.0f }},
-				Vertex{{ 0.f, -3.f, -2.f }, {}, { 0.5f, 1.0f }},
-				Vertex{{ 3.f, -3.f, -2.f }, {}, { 1.0f, 1.0f }},
-			},
-			{
-				3,0,4,1,5,2,
-				2,6,
-				6,3,7,4,8,5
-			},
-			PrimitiveTopology::TriangleStrip
-		}
-	};
+					(ndcVertec.position.x + 1) / 2.0f * m_Width,
+				(1.0f - ndcVertec.position.y) / 2.0f * m_Height
+			});
+	}
 
-	for (Mesh& mesh : meshesWorld)
+	// Depending on the topology of the mesh, use indices differently
+	switch (m_Mesh.primitiveTopology)
 	{
-		// Convert all the vertices from world space to NDC space
-		VertexTransformationFunction(mesh.vertices, mesh.vertices_out);
-
-		// Create a vector for all the vertices in raster space
-		std::vector<Vector2> verticesRaster{};
-
-		// Convert all the vertices from NDC space to raster space
-		for (const Vertex_Out& ndcVertec : mesh.vertices_out)
+	case PrimitiveTopology::TriangleList:
+		// For each triangle
+		for (int curStartVertexIdx{}; curStartVertexIdx < m_Mesh.indices.size(); curStartVertexIdx += 3)
 		{
-			verticesRaster.push_back(
-				{
-						(ndcVertec.position.x + 1) / 2.0f * m_Width,
-					(1.0f - ndcVertec.position.y) / 2.0f * m_Height
-				});
+			RenderTriangle(m_Mesh, verticesRaster, curStartVertexIdx, false);
 		}
-
-		// Depending on the topology of the mesh, calculate triangles differently
-		switch (mesh.primitiveTopology)
+		break;
+	case PrimitiveTopology::TriangleStrip:
+		// For each triangle
+		for (int curStartVertexIdx{}; curStartVertexIdx < m_Mesh.indices.size() - 2; ++curStartVertexIdx)
 		{
-		case PrimitiveTopology::TriangleList:
-			// For each triangle
-			for (int curStartVertexIdx{}; curStartVertexIdx < mesh.indices.size(); curStartVertexIdx += 3)
-			{
-				RenderTriangle(mesh, verticesRaster, curStartVertexIdx, false);
-			}
-			break;
-		case PrimitiveTopology::TriangleStrip:
-			// For each triangle
-			for (int curStartVertexIdx{}; curStartVertexIdx < mesh.indices.size() - 2; ++curStartVertexIdx)
-			{
-				RenderTriangle(mesh, verticesRaster, curStartVertexIdx, curStartVertexIdx % 2);
-			}
-			break;
+			RenderTriangle(m_Mesh, verticesRaster, curStartVertexIdx, curStartVertexIdx % 2);
 		}
+		break;
 	}
 
 	//@END
@@ -122,35 +104,57 @@ void Renderer::Render()
 	SDL_UpdateWindowSurface(m_pWindow);
 }
 
-void Renderer::VertexTransformationFunction(const std::vector<Vertex>& vertices_in, std::vector<Vertex_Out>& vertices_out) const
+void dae::Renderer::ToggleRenderState()
 {
-	// Reserve the amount of vertices into the new vertex list
-	vertices_out.reserve(vertices_in.size());
+	// Shuffle through all the render states
+	m_RendererState = static_cast<RendererState>((static_cast<int>(m_RendererState) + 1) % (static_cast<int>(RendererState::Depth) + 1));
+}
 
-	// For each vertex in the world vertices
-	for (const Vertex& vertex : vertices_in)
+void Renderer::VertexTransformationFunction()
+{
+	// Calculate the transformation matrix for this mesh
+	Matrix worldViewProjectionMatrix{ m_Mesh.worldMatrix * m_Camera.viewMatrix * m_Camera.projectionMatrix };
+
+	// Clear the vertices list
+	m_Mesh.vertices_out.clear();
+
+	// Reserve the amount of vertices into the new vertex list
+	m_Mesh.vertices_out.reserve(m_Mesh.vertices.size());
+
+	// For each vertex in the mesh
+	for (const Vertex& v : m_Mesh.vertices)
 	{
+		// Create a new vertex
+		Vertex_Out vOut{ {}, v.color, v.uv, v.normal, v.tangent };
+
 		// Tranform the vertex using the inversed view matrix
-		Vector4 outPosition{ m_Camera.invViewMatrix.TransformPoint(vertex.position), 0.0f };
-		
-		// Apply the perspective divide
-		outPosition.x = outPosition.x / (m_AspectRatio * m_Camera.fov) / outPosition.z;
-		outPosition.y = outPosition.y / m_Camera.fov / outPosition.z;
+		vOut.position = worldViewProjectionMatrix.TransformPoint({ v.position, 1.0f });
+
+		// Divide all properties of the position by the original z (stored in position.w)
+		vOut.position.x /= vOut.position.w;
+		vOut.position.y /= vOut.position.w;
+		vOut.position.z /= vOut.position.w;
 
 		// Add the new vertex to the list of NDC vertices
-		vertices_out.emplace_back(outPosition);
+		m_Mesh.vertices_out.emplace_back(vOut);
 	}
 }
 
-void dae::Renderer::RenderTriangle(const Mesh& mesh, const std::vector<Vector2>& rasterVertices, int curVertexIdx, bool swapVertices)
+void dae::Renderer::RenderTriangle(const Mesh& mesh, const std::vector<Vector2>& rasterVertices, int curVertexIdx, bool swapVertices) const
 {
 	// Calcalate the indexes of the vertices on this triangle
 	const uint32_t vertexIdx0{ mesh.indices[curVertexIdx] };
 	const uint32_t vertexIdx1{ mesh.indices[curVertexIdx + 1 * !swapVertices + 2 * swapVertices] };
 	const uint32_t vertexIdx2{ mesh.indices[curVertexIdx + 2 * !swapVertices + 1 * swapVertices] };
 
-	// If a triangle has the same vertex twice, continue to the next triangle
-	if (vertexIdx0 == vertexIdx1 || vertexIdx1 == vertexIdx2 || vertexIdx0 == vertexIdx2) return;
+	// If a triangle has the same vertex twice
+	// Or if a one of the vertices is outside the frustum
+	// Continue
+	if (vertexIdx0 == vertexIdx1 || vertexIdx1 == vertexIdx2 || vertexIdx0 == vertexIdx2 ||
+		m_Camera.IsOutsideFrustum(mesh.vertices_out[vertexIdx0].position) || 
+		m_Camera.IsOutsideFrustum(mesh.vertices_out[vertexIdx1].position) ||
+		m_Camera.IsOutsideFrustum(mesh.vertices_out[vertexIdx2].position))
+		return;
 
 	// Get all the current vertices
 	const Vector2 v0{ rasterVertices[vertexIdx0] };
@@ -205,35 +209,65 @@ void dae::Renderer::RenderTriangle(const Mesh& mesh, const std::vector<Vector2>&
 			const float weightV1{ edge20PointCross / fullTriangleArea };
 			const float weightV2{ edge01PointCross / fullTriangleArea };
 
-			const float depthV0{ (mesh.vertices_out[vertexIdx0].position.z) };
-			const float depthV1{ (mesh.vertices_out[vertexIdx1].position.z) };
-			const float depthV2{ (mesh.vertices_out[vertexIdx2].position.z) };
-
-			// Calculate the depth at this pixel
-			const float interpolatedDepth
+			// Calculate the Z depth at this pixel
+			const float interpolatedZDepth
 			{
 				1.0f /
-					(weightV0 / depthV0 +
-					weightV1 / depthV1 +
-					weightV2 / depthV2)
+					(weightV0 / mesh.vertices_out[vertexIdx0].position.z +
+					weightV1 / mesh.vertices_out[vertexIdx1].position.z +
+					weightV2 / mesh.vertices_out[vertexIdx2].position.z)
 			};
 
-			// If this pixel hit is further away then a previous pixel hit, continue to the next pixel
-			if (m_pDepthBufferPixels[pixelIdx] < interpolatedDepth) continue;
-
-			const Vector2 curPixelUV
-			{
-				(weightV0 * mesh.vertices[vertexIdx0].uv / depthV0 +
-				weightV1 * mesh.vertices[vertexIdx1].uv / depthV1 +
-				weightV2 * mesh.vertices[vertexIdx2].uv / depthV2)
-					* interpolatedDepth
-			};
+			// If the depth is outside the frustum,
+			// Or if the current depth buffer is less then the current depth,
+			// continue to the next pixel
+			if (interpolatedZDepth < 0.0f || interpolatedZDepth > 1.0f ||
+				m_pDepthBufferPixels[pixelIdx] < interpolatedZDepth) 
+				continue;
 
 			// Save the new depth
-			m_pDepthBufferPixels[pixelIdx] = interpolatedDepth;
+			m_pDepthBufferPixels[pixelIdx] = interpolatedZDepth;
 
-			// Set the final color to white if the current pixel is inside the triangle
-			ColorRGB finalColor{ m_pTexture->Sample(curPixelUV) };
+			// The final color to render at this pixel
+			ColorRGB finalColor{};
+
+			// Switch between all the render states
+			switch (m_RendererState)
+			{
+			case RendererState::Normal:
+			{
+				// Calculate the W depth at this pixel
+				const float interpolatedWDepth
+				{
+					1.0f /
+						(weightV0 / mesh.vertices_out[vertexIdx0].position.w +
+						weightV1 / mesh.vertices_out[vertexIdx1].position.w +
+						weightV2 / mesh.vertices_out[vertexIdx2].position.w)
+				};
+
+				// Calculate the UV coordinate at this pixel
+				const Vector2 curPixelUV
+				{
+					(weightV0 * mesh.vertices[vertexIdx0].uv / mesh.vertices_out[vertexIdx0].position.w +
+					weightV1 * mesh.vertices[vertexIdx1].uv / mesh.vertices_out[vertexIdx1].position.w +
+					weightV2 * mesh.vertices[vertexIdx2].uv / mesh.vertices_out[vertexIdx2].position.w)
+						* interpolatedWDepth
+				};
+
+				// Retrieve the color of the texture at the current UV coordinate
+				finalColor = m_pTexture->Sample(curPixelUV);
+				break;
+			}
+			case RendererState::Depth:
+			{
+				// Remap the Z depth
+				const float depthColor{ Remap(interpolatedZDepth, 0.985f, 1.0f) };
+
+				// Set the color to showcase the depth
+				finalColor = { depthColor, depthColor, depthColor };
+				break;
+			}
+			}
 
 			//Update Color in Buffer
 			finalColor.MaxToOne();
@@ -248,7 +282,8 @@ void dae::Renderer::RenderTriangle(const Mesh& mesh, const std::vector<Vector2>&
 
 void dae::Renderer::ClearBackground() const
 {
-	SDL_FillRect(m_pBackBuffer, NULL, SDL_MapRGB(m_pBackBuffer->format, 100, 100, 100));
+	// Fill the background with black (0,0,0)
+	SDL_FillRect(m_pBackBuffer, NULL, SDL_MapRGB(m_pBackBuffer->format, 0, 0, 0));
 }
 
 void dae::Renderer::ResetDepthBuffer() const
@@ -260,4 +295,14 @@ void dae::Renderer::ResetDepthBuffer() const
 bool Renderer::SaveBufferToImage() const
 {
 	return SDL_SaveBMP(m_pBackBuffer, "Rasterizer_ColorBuffer.bmp");
+}
+
+void dae::Renderer::InitMesh()
+{
+	Utils::ParseOBJ("Resources/tuktuk.obj", m_Mesh.vertices, m_Mesh.indices);
+
+	const Vector3 position{ m_Camera.origin + Vector3{ 0.0f, -3.0f, 15.0f } };
+	const Vector3 rotation{ };
+	const Vector3 scale{ Vector3{ 0.5f, 0.5f, 0.5f } };
+	m_Mesh.worldMatrix = Matrix::CreateScale(scale) * Matrix::CreateRotation(rotation) * Matrix::CreateTranslation(position);
 }

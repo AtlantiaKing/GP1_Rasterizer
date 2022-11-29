@@ -8,6 +8,23 @@
 
 namespace dae
 {
+	namespace LightingUtils
+	{
+		inline ColorRGB Lambert(float kd, const ColorRGB& cd)
+		{
+			return cd * kd / PI;
+		}
+
+		inline ColorRGB Phong(float ks, float exp, const Vector3& l, const Vector3& v, const Vector3& n)
+		{
+			const Vector3 reflectedLightVector{ Vector3::Reflect(l,n) };
+			const float reflectedViewDot{ Vector3::DotClamped(reflectedLightVector, v) };
+			const float phong{ ks * powf(reflectedViewDot, exp) };
+
+			return ColorRGB{ phong, phong, phong };
+		}
+	}
+
 	namespace Utils
 	{
 		//Just parses vertices and indices

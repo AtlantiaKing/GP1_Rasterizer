@@ -50,6 +50,11 @@ namespace dae {
 		return v1.x * v2.x + v1.y * v2.y + v1.z * v2.z;
 	}
 
+	float Vector3::DotClamped(const Vector3& v1, const Vector3& v2)
+	{
+		return std::max(v1.x * v2.x + v1.y * v2.y + v1.z * v2.z, 0.0f);
+	}
+
 	Vector3 Vector3::Cross(const Vector3& v1, const Vector3& v2)
 	{
 		return Vector3{

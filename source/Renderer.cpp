@@ -14,7 +14,10 @@ using namespace dae;
 
 Renderer::Renderer(SDL_Window* pWindow) 
 	: m_pWindow(pWindow)
-	, m_pTexture{ Texture::LoadFromFile("Resources/tuktuk.png") }
+	, m_pDiffuseTexture{ Texture::LoadFromFile("Resources/vehicle_diffuse.png") }
+	, m_pSpecularTexture{ Texture::LoadFromFile("Resources/vehicle_specular.png") }
+	, m_pGlossinessTexture{ Texture::LoadFromFile("Resources/vehicle_gloss.png") }
+	, m_pNormalTexture{ Texture::LoadFromFile("Resources/vehicle_normal.png")}
 {
 	//Initialize
 	SDL_GetWindowSize(pWindow, &m_Width, &m_Height);
@@ -28,7 +31,7 @@ Renderer::Renderer(SDL_Window* pWindow)
 	ResetDepthBuffer();
 
 	//Initialize Camera
-	m_Camera.Initialize(60.f, { .0f,.0f,-10.f }, static_cast<float>(m_Width) / m_Height);
+	m_Camera.Initialize(45.0f, { 0.0f, 0.0f, 0.0f }, static_cast<float>(m_Width) / m_Height);
 
 	InitMesh();
 }
@@ -36,7 +39,6 @@ Renderer::Renderer(SDL_Window* pWindow)
 Renderer::~Renderer()
 {
 	delete[] m_pDepthBufferPixels;
-	delete m_pTexture;
 }
 
 void Renderer::Update(Timer* pTimer)
@@ -45,8 +47,11 @@ void Renderer::Update(Timer* pTimer)
 	m_Camera.Update(pTimer);
 
 	// Rotate the mesh
-	const float meshRotationPerSecond{ 50.0f };
-	m_Mesh.RotateY(meshRotationPerSecond * pTimer->GetElapsed());
+	if (m_IsRotatingMesh)
+	{
+		const float meshRotationPerSecond{ 1.0f };
+		m_Mesh.RotateY(meshRotationPerSecond * pTimer->GetElapsed());
+	}
 }
 
 void Renderer::Render()
@@ -104,10 +109,27 @@ void Renderer::Render()
 	SDL_UpdateWindowSurface(m_pWindow);
 }
 
-void dae::Renderer::ToggleRenderState()
+void dae::Renderer::ToggleRenderState(RendererState toggleState)
 {
-	// Shuffle through all the render states
-	m_RendererState = static_cast<RendererState>((static_cast<int>(m_RendererState) + 1) % (static_cast<int>(RendererState::Depth) + 1));
+	// If the toggleState is equal to the current state, switch back to the default state
+	// Else, set the current state to the toggleState
+	m_RendererState = m_RendererState == toggleState ? RendererState::Default : toggleState;
+}
+
+void dae::Renderer::ToggleLightingMode()
+{
+	// Shuffle through all the lighting modes
+	m_LightingMode = static_cast<LightingMode>((static_cast<int>(m_LightingMode) + 1) % (static_cast<int>(LightingMode::Specular) + 1));
+}
+
+void dae::Renderer::ToggleMeshRotation()
+{
+	m_IsRotatingMesh = !m_IsRotatingMesh;
+}
+
+void dae::Renderer::ToggleNormalMap()
+{
+	m_IsNormalMapActive = !m_IsNormalMapActive;
 }
 
 void Renderer::VertexTransformationFunction()
@@ -130,10 +152,18 @@ void Renderer::VertexTransformationFunction()
 		// Tranform the vertex using the inversed view matrix
 		vOut.position = worldViewProjectionMatrix.TransformPoint({ v.position, 1.0f });
 
+		// Calculate the view direction
+		vOut.viewDirection = Vector3{ vOut.position.x, vOut.position.y, vOut.position.z };
+		vOut.viewDirection.Normalize();
+
 		// Divide all properties of the position by the original z (stored in position.w)
 		vOut.position.x /= vOut.position.w;
 		vOut.position.y /= vOut.position.w;
 		vOut.position.z /= vOut.position.w;
+
+		// Transform the normal and the tangent of the vertex
+		vOut.normal = m_Mesh.worldMatrix.TransformVector(v.normal);
+		vOut.tangent = m_Mesh.worldMatrix.TransformVector(v.tangent);
 
 		// Add the new vertex to the list of NDC vertices
 		m_Mesh.vertices_out.emplace_back(vOut);
@@ -191,6 +221,16 @@ void dae::Renderer::RenderTriangle(const Mesh& mesh, const std::vector<Vector2>&
 			const int pixelIdx{ px + py * m_Width };
 			const Vector2 curPixel{ static_cast<float>(px), static_cast<float>(py) };
 
+			if (m_RendererState == RendererState::BoundingBox)
+			{
+				m_pBackBufferPixels[pixelIdx] = SDL_MapRGB(m_pBackBuffer->format,
+					static_cast<uint8_t>(255),
+					static_cast<uint8_t>(255),
+					static_cast<uint8_t>(255));
+
+				continue;
+			}
+
 			// Calculate the vector between the first vertex and the point
 			const Vector2 v0ToPoint{ curPixel - v0 };
 			const Vector2 v1ToPoint{ curPixel - v1 };
@@ -221,20 +261,19 @@ void dae::Renderer::RenderTriangle(const Mesh& mesh, const std::vector<Vector2>&
 			// If the depth is outside the frustum,
 			// Or if the current depth buffer is less then the current depth,
 			// continue to the next pixel
-			if (interpolatedZDepth < 0.0f || interpolatedZDepth > 1.0f ||
-				m_pDepthBufferPixels[pixelIdx] < interpolatedZDepth) 
+			if (m_pDepthBufferPixels[pixelIdx] < interpolatedZDepth) 
 				continue;
 
 			// Save the new depth
 			m_pDepthBufferPixels[pixelIdx] = interpolatedZDepth;
 
-			// The final color to render at this pixel
-			ColorRGB finalColor{};
+			// The pixel info
+			Vertex_Out pixelInfo{};
 
 			// Switch between all the render states
 			switch (m_RendererState)
 			{
-			case RendererState::Normal:
+			case RendererState::Default:
 			{
 				// Calculate the W depth at this pixel
 				const float interpolatedWDepth
@@ -246,16 +285,40 @@ void dae::Renderer::RenderTriangle(const Mesh& mesh, const std::vector<Vector2>&
 				};
 
 				// Calculate the UV coordinate at this pixel
-				const Vector2 curPixelUV
+				pixelInfo.uv =
 				{
-					(weightV0 * mesh.vertices[vertexIdx0].uv / mesh.vertices_out[vertexIdx0].position.w +
-					weightV1 * mesh.vertices[vertexIdx1].uv / mesh.vertices_out[vertexIdx1].position.w +
-					weightV2 * mesh.vertices[vertexIdx2].uv / mesh.vertices_out[vertexIdx2].position.w)
+					(weightV0 * mesh.vertices_out[vertexIdx0].uv / mesh.vertices_out[vertexIdx0].position.w +
+					weightV1 * mesh.vertices_out[vertexIdx1].uv / mesh.vertices_out[vertexIdx1].position.w +
+					weightV2 * mesh.vertices_out[vertexIdx2].uv / mesh.vertices_out[vertexIdx2].position.w)
 						* interpolatedWDepth
 				};
 
-				// Retrieve the color of the texture at the current UV coordinate
-				finalColor = m_pTexture->Sample(curPixelUV);
+				// Calculate the normal at this pixel
+				pixelInfo.normal =
+				Vector3{
+					(weightV0 * mesh.vertices_out[vertexIdx0].normal / mesh.vertices_out[vertexIdx0].position.w +
+					weightV1 * mesh.vertices_out[vertexIdx1].normal / mesh.vertices_out[vertexIdx1].position.w +
+					weightV2 * mesh.vertices_out[vertexIdx2].normal / mesh.vertices_out[vertexIdx2].position.w)
+						* interpolatedWDepth
+				}.Normalized();
+
+				// Calculate the tangent at this pixel
+				pixelInfo.tangent =
+				Vector3{
+					(weightV0 * mesh.vertices_out[vertexIdx0].tangent / mesh.vertices_out[vertexIdx0].position.w +
+					weightV1 * mesh.vertices_out[vertexIdx1].tangent / mesh.vertices_out[vertexIdx1].position.w +
+					weightV2 * mesh.vertices_out[vertexIdx2].tangent / mesh.vertices_out[vertexIdx2].position.w)
+						* interpolatedWDepth
+				}.Normalized();
+
+				pixelInfo.viewDirection =
+				Vector3{
+					(weightV0 * mesh.vertices_out[vertexIdx0].viewDirection / mesh.vertices_out[vertexIdx0].position.w +
+					weightV1 * mesh.vertices_out[vertexIdx1].viewDirection / mesh.vertices_out[vertexIdx1].position.w +
+					weightV2 * mesh.vertices_out[vertexIdx2].viewDirection / mesh.vertices_out[vertexIdx2].position.w)
+						* interpolatedWDepth
+				}.Normalized();
+
 				break;
 			}
 			case RendererState::Depth:
@@ -264,18 +327,12 @@ void dae::Renderer::RenderTriangle(const Mesh& mesh, const std::vector<Vector2>&
 				const float depthColor{ Remap(interpolatedZDepth, 0.985f, 1.0f) };
 
 				// Set the color to showcase the depth
-				finalColor = { depthColor, depthColor, depthColor };
+				pixelInfo.color = { depthColor, depthColor, depthColor };
 				break;
 			}
 			}
 
-			//Update Color in Buffer
-			finalColor.MaxToOne();
-
-			m_pBackBufferPixels[px + (py * m_Width)] = SDL_MapRGB(m_pBackBuffer->format,
-				static_cast<uint8_t>(finalColor.r * 255),
-				static_cast<uint8_t>(finalColor.g * 255),
-				static_cast<uint8_t>(finalColor.b * 255));
+			PixelShading(px + (py * m_Width), pixelInfo);
 		}
 	}
 }
@@ -283,13 +340,89 @@ void dae::Renderer::RenderTriangle(const Mesh& mesh, const std::vector<Vector2>&
 void dae::Renderer::ClearBackground() const
 {
 	// Fill the background with black (0,0,0)
-	SDL_FillRect(m_pBackBuffer, NULL, SDL_MapRGB(m_pBackBuffer->format, 0, 0, 0));
+	SDL_FillRect(m_pBackBuffer, NULL, SDL_MapRGB(m_pBackBuffer->format, 100, 100, 100));
 }
 
 void dae::Renderer::ResetDepthBuffer() const
 {
 	const int nrPixels{ m_Width * m_Height };
 	std::fill_n(m_pDepthBufferPixels, nrPixels, FLT_MAX);
+}
+
+void dae::Renderer::PixelShading(int pixelIdx, const Vertex_Out& pixelInfo) const
+{
+	Vector3 useNormal{ pixelInfo.normal };
+
+	if (m_IsNormalMapActive)
+	{
+		Vector3 binormal = Vector3::Cross(pixelInfo.normal, pixelInfo.tangent);
+		Matrix tangentSpaceAxis = Matrix{ pixelInfo.tangent, binormal, pixelInfo.normal, Vector3::Zero };
+		ColorRGB currentNormalMap{ 2.0f * m_pNormalTexture->Sample(pixelInfo.uv) - ColorRGB{ 1.0f, 1.0f, 1.0f } };
+		Vector3 normalMapSample{ currentNormalMap.r, currentNormalMap.g, currentNormalMap.b };
+		useNormal = tangentSpaceAxis.TransformVector(normalMapSample);
+	}
+
+	Vector3 lightDirection{ 0.577f, -0.577f, 0.577f };
+	lightDirection.Normalize();
+	const float lightIntensity{ 7.0f };
+	const float specularShininess{ 25.0f };
+
+	ColorRGB finalColor{};
+
+	switch (m_RendererState)
+	{
+	case RendererState::Default:
+	{
+		const float observedArea{ Vector3::DotClamped(useNormal.Normalized(), -lightDirection.Normalized()) };
+		const ColorRGB ambientColor{ 0.025f, 0.025f, 0.025f };
+
+		switch (m_LightingMode)
+		{
+		case dae::Renderer::LightingMode::Combined:
+		{
+			const ColorRGB lambert{ LightingUtils::Lambert(1.0f, m_pDiffuseTexture->Sample(pixelInfo.uv)) };
+			const float specularExp{ specularShininess * m_pGlossinessTexture->Sample(pixelInfo.uv).r };
+			const ColorRGB specular{ m_pSpecularTexture->Sample(pixelInfo.uv) * LightingUtils::Phong(1.0f, specularExp, -lightDirection, pixelInfo.viewDirection, useNormal) };
+			finalColor += lightIntensity * observedArea * lambert + specular;
+			break;
+		}
+		case dae::Renderer::LightingMode::ObservedArea:
+		{
+			finalColor += ColorRGB{ observedArea, observedArea, observedArea };
+			break;
+		}
+		case dae::Renderer::LightingMode::Diffuse:
+		{
+			finalColor += lightIntensity * observedArea * LightingUtils::Lambert(1.0f, m_pDiffuseTexture->Sample(pixelInfo.uv));
+			break;
+		}
+		case dae::Renderer::LightingMode::Specular:
+		{
+			const float specularExp{ specularShininess * m_pGlossinessTexture->Sample(pixelInfo.uv).r };
+			const ColorRGB specular{ m_pSpecularTexture->Sample(pixelInfo.uv) * LightingUtils::Phong(1.0f, specularExp, -lightDirection, pixelInfo.viewDirection, useNormal) };
+			finalColor += specular * observedArea;
+			break;
+		}
+		}
+
+		finalColor += ambientColor;
+
+		break;
+	}
+	case RendererState::Depth:
+	{
+		finalColor += pixelInfo.color;
+		break;
+	}
+	}
+
+	//Update Color in Buffer
+	finalColor.MaxToOne();
+
+	m_pBackBufferPixels[pixelIdx] = SDL_MapRGB(m_pBackBuffer->format,
+		static_cast<uint8_t>(finalColor.r * 255),
+		static_cast<uint8_t>(finalColor.g * 255),
+		static_cast<uint8_t>(finalColor.b * 255));
 }
 
 bool Renderer::SaveBufferToImage() const
@@ -299,10 +432,10 @@ bool Renderer::SaveBufferToImage() const
 
 void dae::Renderer::InitMesh()
 {
-	Utils::ParseOBJ("Resources/tuktuk.obj", m_Mesh.vertices, m_Mesh.indices);
+	Utils::ParseOBJ("Resources/vehicle.obj", m_Mesh.vertices, m_Mesh.indices);
 
-	const Vector3 position{ m_Camera.origin + Vector3{ 0.0f, -3.0f, 15.0f } };
+	const Vector3 position{ m_Camera.origin + Vector3{ 0.0f, 0.0f, 50.0f } };
 	const Vector3 rotation{ };
-	const Vector3 scale{ Vector3{ 0.5f, 0.5f, 0.5f } };
+	const Vector3 scale{ Vector3{ 1.0f, 1.0f, 1.0f } };
 	m_Mesh.worldMatrix = Matrix::CreateScale(scale) * Matrix::CreateRotation(rotation) * Matrix::CreateTranslation(position);
 }

@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <vector>
+#include <memory>
 
 #include "Camera.h"
 #include "DataTypes.h"
@@ -20,6 +21,13 @@ namespace dae
 	class Renderer final
 	{
 	public:
+		enum class RendererState
+		{
+			Default,
+			BoundingBox,
+			Depth
+		};
+
 		Renderer(SDL_Window* pWindow);
 		~Renderer();
 
@@ -30,15 +38,20 @@ namespace dae
 
 		void Update(Timer* pTimer);
 		void Render();
-		void ToggleRenderState();
+		void ToggleRenderState(RendererState toggleState);
+		void ToggleLightingMode();
+		void ToggleMeshRotation();
+		void ToggleNormalMap();
 
 		bool SaveBufferToImage() const;
 
 	private:
-		enum class RendererState
+		enum class LightingMode
 		{
-			Normal,
-			Depth
+			Combined,
+			ObservedArea,
+			Diffuse,
+			Specular
 		};
 
 		SDL_Window* m_pWindow{};
@@ -51,20 +64,27 @@ namespace dae
 
 		Camera m_Camera{};
 
-		Texture* m_pTexture{};
+		std::unique_ptr<Texture> m_pDiffuseTexture{};
+		std::unique_ptr<Texture> m_pSpecularTexture{};
+		std::unique_ptr<Texture> m_pGlossinessTexture{};
+		std::unique_ptr<Texture> m_pNormalTexture{};
 
 		int m_Width{};
 		int m_Height{};
 
 		Mesh m_Mesh{};
 
-		RendererState m_RendererState{ RendererState::Normal };
+		RendererState m_RendererState{ RendererState::Default };
+		LightingMode m_LightingMode{ LightingMode::Combined };
+		bool m_IsRotatingMesh{ true };
+		bool m_IsNormalMapActive{ true };
 
 		//Function that transforms the vertices from the mesh from World space to Screen space
 		void VertexTransformationFunction();
 		void RenderTriangle(const Mesh& mesh, const std::vector<Vector2>& rasterVertices, int vertexIdx, bool swapVertices) const;
 		void ClearBackground() const;
 		void ResetDepthBuffer() const;
+		void PixelShading(int pixelIdx, const Vertex_Out& pixelInfo) const;
 
 		void InitMesh();
 	};

@@ -148,7 +148,7 @@ namespace dae
 
 		inline bool IsOutsideFrustum(const Vector4& v) const
 		{
-			return v.x < -1.0f || v.x > 1.0f || v.y < -1.0f || v.y > 1.0f;
+			return v.x < -1.0f || v.x > 1.0f || v.y < -1.0f || v.y > 1.0f || v.z < 0.0f || v.z > 1.0f;
 		}
 	};
 }

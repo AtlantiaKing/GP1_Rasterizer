@@ -11,7 +11,7 @@ namespace dae
 		Vector2 uv{};
 		Vector3 normal{}; //W4
 		Vector3 tangent{}; //W4
-		//Vector3 viewDirection{}; //W4
+		Vector3 viewDirection{}; //W4
 	};
 
 	struct Vertex_Out
@@ -21,7 +21,7 @@ namespace dae
 		Vector2 uv{};
 		Vector3 normal{};
 		Vector3 tangent{};
-		//Vector3 viewDirection{};
+		Vector3 viewDirection{};
 	};
 
 	enum class PrimitiveTopology
@@ -39,10 +39,10 @@ namespace dae
 		std::vector<Vertex_Out> vertices_out{};
 		Matrix worldMatrix{};
 
-		// Rotate the mesh over specified angle (in degrees)
+		// Rotate the mesh over specified angle (in radians)
 		void RotateY(float angle)
 		{
-			worldMatrix = Matrix::CreateRotationY(angle * TO_RADIANS) * worldMatrix;
+			worldMatrix = Matrix::CreateRotationY(angle) * worldMatrix;
 		}
 	};
 }

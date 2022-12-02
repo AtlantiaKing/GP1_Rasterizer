@@ -10,6 +10,7 @@ namespace dae
 {
 	namespace GeometryUtils
 	{
+		// Source: https://www.geeksforgeeks.org/program-for-point-of-intersection-of-two-lines/
 		inline Vector2 GetIntersectPoint(const Vector2& edge0v0, const Vector2& edge0v1, const Vector2& edge1v0, const Vector2& edge1v1)
 		{
 			const float a0{ edge0v1.y - edge0v0.y };

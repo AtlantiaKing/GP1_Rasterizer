@@ -93,6 +93,8 @@ void Renderer::Render()
 	};
 
 #ifdef IS_CLIPPING_ENABLED
+	// Source: https://en.wikipedia.org/wiki/Sutherland%E2%80%93Hodgman_algorithm
+	// 
 	// Check each triangle if clipping should be applied
 	for (int i{}; i < m_Mesh.indices.size(); i += 3)
 	{

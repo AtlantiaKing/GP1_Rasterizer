@@ -10,7 +10,6 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="Renderer.h" />
     <ClInclude Include="Vector3.h">
       <Filter>Math</Filter>
     </ClInclude>
@@ -47,6 +46,7 @@
     <ClInclude Include="Texture.h">
       <Filter>Misc</Filter>
     </ClInclude>
+    <ClInclude Include="Renderer.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="main.cpp" />

@@ -8,6 +8,48 @@
 
 namespace dae
 {
+	namespace GeometryUtils
+	{
+		inline Vector2 GetIntersectPoint(const Vector2& edge0v0, const Vector2& edge0v1, const Vector2& edge1v0, const Vector2& edge1v1)
+		{
+			const float a0{ edge0v1.y - edge0v0.y };
+			const float b0{ edge0v0.x - edge0v1.x };
+			const float c0{ a0 * edge0v0.x + b0 * edge0v0.y };
+
+			const float a1{ edge1v1.y - edge1v0.y };
+			const float b1{ edge1v0.x - edge1v1.x };
+			const float c1{ a1 * edge1v0.x + b1 * edge1v0.y };
+
+			const float determinant{ a0 * b1 - a1 * b0 };
+
+			const float x{ (b1 * c0 - b0 * c1) / determinant };
+			const float y{ (a0 * c1 - a1 * c0) / determinant };
+
+			return { x, y };
+		}
+
+		inline bool IsInTriangle(const Vector2& v0, const Vector2& v1, const Vector2& v2, const Vector2 p)
+		{
+			// Calculate the edges of the current triangle
+			const Vector2 edge01{ v1 - v0 };
+			const Vector2 edge12{ v2 - v1 };
+			const Vector2 edge20{ v0 - v2 };
+
+			// Calculate the vector between the first vertex and the point
+			const Vector2 v0ToPoint{ p - v0 };
+			const Vector2 v1ToPoint{ p - v1 };
+			const Vector2 v2ToPoint{ p - v2 };
+
+			// Calculate cross product from edge to start to point
+			const float edge01PointCross{ Vector2::Cross(edge01, v0ToPoint) };
+			const float edge12PointCross{ Vector2::Cross(edge12, v1ToPoint) };
+			const float edge20PointCross{ Vector2::Cross(edge20, v2ToPoint) };
+
+			// Check if pixel is inside triangle, if not continue to the next pixel
+			return edge01PointCross >= 0 && edge12PointCross >= 0 && edge20PointCross >= 0;
+		}
+	}
+
 	namespace LightingUtils
 	{
 		inline ColorRGB Lambert(float kd, const ColorRGB& cd)

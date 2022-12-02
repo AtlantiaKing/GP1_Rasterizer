@@ -93,7 +93,7 @@ namespace dae
 			const float minFov{ 30.0f };
 			const float maxFov{ 170.0f };
 			const float mouseMovementSpeed{ 2.0f };
-			const float angularSpeed{ 50.0f * TO_RADIANS };
+			const float angularSpeed{ 5.0f * TO_RADIANS };
 
 			// The total movement of this frame
 			Vector3 direction{};

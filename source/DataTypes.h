@@ -34,6 +34,7 @@ namespace dae
 	{
 		std::vector<Vertex> vertices{};
 		std::vector<uint32_t> indices{};
+		std::vector<uint32_t> useIndices{};
 		PrimitiveTopology primitiveTopology{ PrimitiveTopology::TriangleList };
 
 		std::vector<Vertex_Out> vertices_out{};

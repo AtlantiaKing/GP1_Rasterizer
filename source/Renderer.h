@@ -85,6 +85,9 @@ namespace dae
 		void ClearBackground() const;
 		void ResetDepthBuffer() const;
 		void PixelShading(int pixelIdx, const Vertex_Out& pixelInfo) const;
+		inline Vector2 CalculateNDCToRaster(const Vector3& ndcVertex) const;
+		inline Vector3 CalculateRasterToNDC(const Vector2& rasterVertex, float interpolatedZ) const;
+		inline void OrderTriangleIndices(const std::vector<Vector2>& rasterVertices, int i0, int i1, int i2);
 
 		void InitMesh();
 	};

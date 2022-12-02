@@ -12,6 +12,8 @@
 
 using namespace dae;
 
+#define IS_CLIPPING_ENABLED
+
 Renderer::Renderer(SDL_Window* pWindow) 
 	: m_pWindow(pWindow)
 	, m_pDiffuseTexture{ Texture::LoadFromFile("Resources/vehicle_diffuse.png") }
@@ -70,34 +72,364 @@ void Renderer::Render()
 	// Convert all the vertices in the mesh from world space to NDC space
 	VertexTransformationFunction();
 
+	m_Mesh.useIndices = m_Mesh.indices;
+
 	// Create a vector for all the vertices in raster space
-	std::vector<Vector2> verticesRaster{};
+	std::vector<Vector2> verticesRasterSpace{};
 
 	// Convert all the vertices from NDC space to raster space
-	for (const Vertex_Out& ndcVertec : m_Mesh.vertices_out)
+	for (const Vertex_Out& ndcVertex : m_Mesh.vertices_out)
 	{
-		verticesRaster.push_back(
-			{
-					(ndcVertec.position.x + 1) / 2.0f * m_Width,
-				(1.0f - ndcVertec.position.y) / 2.0f * m_Height
-			});
+		verticesRasterSpace.push_back(CalculateNDCToRaster(ndcVertex.position));
 	}
+
+	// Calculate the points of the screen
+	std::vector<Vector2> rasterVertices
+	{
+		{ 0.0f, 0.0f },
+		{ 0.0f, static_cast<float>(m_Height) },
+		{ static_cast<float>(m_Width), static_cast<float>(m_Height) },
+		{ static_cast<float>(m_Width), 0.0f }
+	};
+
+#ifdef IS_CLIPPING_ENABLED
+	// Check each triangle if clipping should be applied
+	for (int i{}; i < m_Mesh.indices.size(); i += 3)
+	{
+		// Calcalate the indexes of the vertices on this triangle
+		const uint32_t vertexIdx0{ m_Mesh.indices[i] };
+		const uint32_t vertexIdx1{ m_Mesh.indices[i + 1] };
+		const uint32_t vertexIdx2{ m_Mesh.indices[i + 2] };
+
+		// If one of the indexes are the same, this triangle should be skipped
+		if (vertexIdx0 == vertexIdx1 || vertexIdx1 == vertexIdx2 || vertexIdx0 == vertexIdx2)
+			continue;
+
+		// Retrieve if the vertices are inside the frustum
+		const bool isV0InFrustum{ !m_Camera.IsOutsideFrustum(m_Mesh.vertices_out[vertexIdx0].position) };
+		const bool isV1InFrustum{ !m_Camera.IsOutsideFrustum(m_Mesh.vertices_out[vertexIdx1].position) };
+		const bool isV2InFrustum{ !m_Camera.IsOutsideFrustum(m_Mesh.vertices_out[vertexIdx2].position) };
+
+		// Retrieve if the triangle is inside or outside the frustum (completely)
+		const bool isTriangleInFrustum{ isV0InFrustum && isV1InFrustum && isV2InFrustum };
+		const bool isTriangleOutFrustum{ !isV0InFrustum && !isV1InFrustum && !isV2InFrustum };
+
+		// If the triangle is completely inside or completely outside the frustum, continue to the next triangle
+		if (isTriangleOutFrustum || isTriangleInFrustum)
+			continue;
+
+		// A list of all the vertices when clipped
+		std::vector<Vertex_Out> outputVertexList{ m_Mesh.vertices_out[vertexIdx0], m_Mesh.vertices_out[vertexIdx1], m_Mesh.vertices_out[vertexIdx2] };
+		std::vector<Vector2> outputList{ verticesRasterSpace[vertexIdx0], verticesRasterSpace[vertexIdx1], verticesRasterSpace[vertexIdx2] };
+		
+		// A check to make sure a corner only gets added once
+		bool hasAddedCorner{};
+
+		// For each point of the screen
+		for (int rasterIdx{}; rasterIdx < rasterVertices.size(); ++rasterIdx)
+		{
+			// Calculate the current edge of the screen
+			const Vector2 edgeStart{ rasterVertices[(rasterIdx + 1) % rasterVertices.size()] };
+			const Vector2 edgeEnd{ rasterVertices[rasterIdx] };
+			const Vector2 edge{ edgeStart, edgeEnd };
+
+			// Make a copy of the current output lists and clear the output lists
+			const std::vector<Vertex_Out> inputVertexList{ outputVertexList };
+			const std::vector<Vector2> inputList{ outputList };
+			outputVertexList.clear();
+			outputList.clear();
+
+			// For each edge on the triangle
+			for (int edgeIdx{}; edgeIdx < inputList.size(); ++edgeIdx)
+			{
+				// Calculate the points on the edge
+				Vector2 prevPoint{ inputList[edgeIdx] };
+				Vector2 curPoint{ inputList[(edgeIdx + 1) % inputList.size()] };
+
+				// Calculate the intersection point of the current edge of the triangle and the current edge of the screen
+				Vector2 intersectPoint{ GeometryUtils::GetIntersectPoint(prevPoint, curPoint, edgeStart, edgeEnd) };
+				// Clamp the intersection point to make sure it doesn't go out of the frustum
+				intersectPoint.x = std::clamp(intersectPoint.x, 0.0f, static_cast<float>(m_Width));
+				intersectPoint.y = std::clamp(intersectPoint.y, 0.0f, static_cast<float>(m_Height));
+
+				// Calculate if the two points of the triangle edge are on screen or not
+				const bool curPointInsideRaster{ Vector2::Cross(edge, Vector2{ edgeStart, curPoint}) >= 0 };
+				const bool prevPointInsideRaster{ Vector2::Cross(edge, Vector2{ edgeStart, prevPoint}) >= 0 };
+
+				// If only one of both points of the edge is on screen, add the intersection point to the output
+				//			And interpolate between all the values of the vertex
+				// Additionally if the current point is on screen, add this point to the output as well
+				// Else if none of the points is on screen, try adding a corner to the output
+				if (curPointInsideRaster)
+				{
+					if (!prevPointInsideRaster)
+					{
+						// Only one of the points is on screen, so add the intersection point to the output
+						outputList.push_back(intersectPoint);
+
+						// Calculate the interpolating distances
+						const float totalDistance{ (curPoint - prevPoint).Magnitude() };
+						const float prevDistance{ (curPoint - intersectPoint).Magnitude() };
+						const float curDistance{ (intersectPoint - prevPoint).Magnitude() };
+
+						// Calculate the interpolated vertex
+						Vertex_Out newVertex{};
+						newVertex.uv = inputVertexList[(edgeIdx + 1) % inputList.size()].uv * curDistance / totalDistance
+							+ inputVertexList[edgeIdx].uv * prevDistance / totalDistance;
+						newVertex.normal = inputVertexList[(edgeIdx + 1) % inputList.size()].normal * curDistance / totalDistance
+							+ inputVertexList[edgeIdx].normal * prevDistance / totalDistance;
+						newVertex.tangent = inputVertexList[(edgeIdx + 1) % inputList.size()].tangent * curDistance / totalDistance
+							+ inputVertexList[edgeIdx].tangent * prevDistance / totalDistance;
+						newVertex.viewDirection = inputVertexList[(edgeIdx + 1) % inputList.size()].viewDirection * curDistance / totalDistance
+							+ inputVertexList[edgeIdx].viewDirection * prevDistance / totalDistance;
+						newVertex.position.z = inputVertexList[(edgeIdx + 1) % inputList.size()].position.z * curDistance / totalDistance
+							+ inputVertexList[edgeIdx].position.z * prevDistance / totalDistance;
+						newVertex.position.w = inputVertexList[(edgeIdx + 1) % inputList.size()].position.w * curDistance / totalDistance
+							+ inputVertexList[edgeIdx].position.w * prevDistance / totalDistance;
+						outputVertexList.push_back(newVertex);
+					}
+
+					//The current point is on screen, so add this point to the output
+					outputList.push_back(curPoint);
+					outputVertexList.push_back(inputVertexList[(edgeIdx + 1) % inputList.size()]);
+				}
+				else if (prevPointInsideRaster)
+				{
+					// Only one of the points is on screen, so add the intersection point to the output
+					outputList.push_back(intersectPoint);
+
+					// Calculate the interpolating distances
+					const float totalDistance{ (curPoint - prevPoint).Magnitude() };
+					const float prevDistance{ (curPoint - intersectPoint).Magnitude() };
+					const float curDistance{ (intersectPoint - prevPoint).Magnitude() };
+
+					// Calculate the interpolated vertex
+					Vertex_Out newVertex{};
+					newVertex.uv = inputVertexList[(edgeIdx + 1) % inputList.size()].uv * curDistance / totalDistance
+						+ inputVertexList[edgeIdx].uv * prevDistance / totalDistance;
+					newVertex.normal = inputVertexList[(edgeIdx + 1) % inputList.size()].normal * curDistance / totalDistance
+						+ inputVertexList[edgeIdx].normal * prevDistance / totalDistance;
+					newVertex.tangent = inputVertexList[(edgeIdx + 1) % inputList.size()].tangent * curDistance / totalDistance
+						+ inputVertexList[edgeIdx].tangent * prevDistance / totalDistance;
+					newVertex.viewDirection = inputVertexList[(edgeIdx + 1) % inputList.size()].viewDirection * curDistance / totalDistance
+						+ inputVertexList[edgeIdx].viewDirection * prevDistance / totalDistance;
+					newVertex.position.z = inputVertexList[(edgeIdx + 1) % inputList.size()].position.z * curDistance / totalDistance
+						+ inputVertexList[edgeIdx].position.z * prevDistance / totalDistance;
+					newVertex.position.w = inputVertexList[(edgeIdx + 1) % inputList.size()].position.w * curDistance / totalDistance
+						+ inputVertexList[edgeIdx].position.w * prevDistance / totalDistance;
+					outputVertexList.push_back(newVertex);
+				}
+				else if (!hasAddedCorner)
+				{
+					// None of the points is on screen, so try to add a corner
+
+					// Find the closest corner to one of both points
+					Vector2 closestCorner{};
+					float closestDistance{ FLT_MAX };
+
+					for (const Vector2& corner : rasterVertices)
+					{
+						float cornerDistance{ (corner - prevPoint).SqrMagnitude() };
+						if (cornerDistance < closestDistance)
+							closestCorner = corner;
+
+						cornerDistance = (corner - curPoint).SqrMagnitude();
+						if (cornerDistance < closestDistance)
+							closestCorner = corner;
+					}
+
+					// If the closest corner is inside the triangle, add it to the output
+					if (GeometryUtils::IsInTriangle(verticesRasterSpace[vertexIdx0], verticesRasterSpace[vertexIdx1], verticesRasterSpace[vertexIdx2], closestCorner))
+					{
+						outputList.push_back(closestCorner);
+						
+						// Calculate the interpolating distances
+						const float prevDistance{ (curPoint - closestCorner).Magnitude() };
+						const float curDistance{ (closestCorner - prevPoint).Magnitude() };
+						const float totalDistance{ prevDistance + curDistance };
+
+						// Calculate the interpolated vertex
+						Vertex_Out newVertex{};
+						newVertex.uv = inputVertexList[(edgeIdx + 1) % inputList.size()].uv * curDistance / totalDistance
+							+ inputVertexList[edgeIdx].uv * prevDistance / totalDistance;
+						newVertex.normal = inputVertexList[(edgeIdx + 1) % inputList.size()].normal * curDistance / totalDistance
+							+ inputVertexList[edgeIdx].normal * prevDistance / totalDistance;
+						newVertex.tangent = inputVertexList[(edgeIdx + 1) % inputList.size()].tangent * curDistance / totalDistance
+							+ inputVertexList[edgeIdx].tangent * prevDistance / totalDistance;
+						newVertex.viewDirection = inputVertexList[(edgeIdx + 1) % inputList.size()].viewDirection * curDistance / totalDistance
+							+ inputVertexList[edgeIdx].viewDirection * prevDistance / totalDistance;
+						newVertex.position.z = inputVertexList[(edgeIdx + 1) % inputList.size()].position.z * curDistance / totalDistance
+							+ inputVertexList[edgeIdx].position.z * prevDistance / totalDistance;
+						newVertex.position.w = inputVertexList[(edgeIdx + 1) % inputList.size()].position.w * curDistance / totalDistance
+							+ inputVertexList[edgeIdx].position.w * prevDistance / totalDistance;
+						outputVertexList.push_back(newVertex);
+
+						hasAddedCorner = true;
+					}
+				}
+			}
+		}
+
+		// Replace the already created raster vertices with the first 3 raster vertices in the output list
+		verticesRasterSpace[i] = outputList[0];
+		verticesRasterSpace[i + 1] = outputList[1];
+		verticesRasterSpace[i + 2] = outputList[2];
+
+		// Replace the already created vertices out vertices with the first 3 vertices out in the output list
+		m_Mesh.vertices_out[i] = outputVertexList[0];
+		m_Mesh.vertices_out[i + 1] = outputVertexList[1];
+		m_Mesh.vertices_out[i + 2] = outputVertexList[2];
+
+		// Calculate the NDC positions and add it to the vertices out
+		const Vector3 i0NDC{ CalculateRasterToNDC(outputList[0], m_Mesh.vertices_out[i].position.z) };
+		m_Mesh.vertices_out[i].position.x = i0NDC.x;
+		m_Mesh.vertices_out[i].position.y = i0NDC.y;
+		
+		const Vector3 i1NDC{ CalculateRasterToNDC(outputList[1], m_Mesh.vertices_out[i + 1].position.z) };
+		m_Mesh.vertices_out[i + 1].position.x = i1NDC.x;
+		m_Mesh.vertices_out[i + 1].position.y = i1NDC.y;
+
+		const Vector3 i2NDC{ CalculateRasterToNDC(outputList[2], m_Mesh.vertices_out[i + 1].position.z) };
+		m_Mesh.vertices_out[i + 2].position.x = i2NDC.x;
+		m_Mesh.vertices_out[i + 2].position.y = i2NDC.y;
+
+		// For each extra vertex that we have created, add them to the raster vertices and vertices out
+		for (int extraVertexIdx{ 3 }; extraVertexIdx < outputList.size(); ++extraVertexIdx)
+		{
+			// Calculate the NDC position and add it to the vertex out
+			const Vector3 ndcPosition{ CalculateRasterToNDC(outputList[extraVertexIdx], 1.0f) };
+			outputVertexList[extraVertexIdx].position.x = ndcPosition.x;
+			outputVertexList[extraVertexIdx].position.y = ndcPosition.y;
+
+			// Add the vertices to the lists
+			verticesRasterSpace.push_back(outputList[extraVertexIdx]);
+			m_Mesh.vertices_out.push_back(outputVertexList[extraVertexIdx]);
+		}
+
+		// Make a list of the indices of all the vertices that are created by clipping
+		std::vector<int> indices{ i, i + 1, i + 2 };
+		for (int outputIdx{ static_cast<int>(outputList.size()) - 4 }; outputIdx >= 0; --outputIdx)
+		{
+			indices.push_back(static_cast<int>(m_Mesh.vertices_out.size()) - outputIdx - 1);
+		}
+
+		if (outputList.size() == 3)
+		{
+			// If there are only 3 points, replace the already created indices with the new ones 
+			m_Mesh.useIndices[i] = indices[0];
+			m_Mesh.useIndices[i + 1] = indices[1];
+			m_Mesh.useIndices[i + 2] = indices[2];
+
+			// Make sure the wind order of the indices is correct
+			OrderTriangleIndices(verticesRasterSpace, i, i + 1, i + 2);
+		}
+		else
+		{
+			// The current edge
+			int currentV0Idx{};
+			int currentV1Idx{ 1 };
+
+			// The current vertex we are making a new edge with
+			int currentCheckIdx{ 2 };
+
+			// The smallest angle found
+			float previousAngle{};
+
+			// Is this the first triangle to be tested
+			bool isFirst{ true };
+
+			// The amount of vertices that we have added to the indices list
+			int verticesAdded{};
+
+			// While not all the vertices have been added to the indices list
+			while (verticesAdded < outputList.size())
+			{
+				// Create the current edge
+				const Vector2 currentEdge{ (outputList[currentV1Idx] - outputList[currentV0Idx]).Normalized() };
+
+				// For every vertex (excluding 0 because we are starting every edge from that vertex)
+				for (int checkVertexIdx{ 1 }; checkVertexIdx < outputList.size(); ++checkVertexIdx)
+				{
+					// If the test vertex is part of the current edge, continue ot the next vertex
+					if (currentV0Idx == checkVertexIdx) continue;
+					if (currentV1Idx == checkVertexIdx) continue;
+
+					// Create the test edge
+					const Vector2 checkEdge{ (outputList[checkVertexIdx] - outputList[currentV0Idx]).Normalized() };
+
+					// Calculate the signed angle between the two edges
+					const float angle{ atan2f(Vector2::Cross(currentEdge, checkEdge), Vector2::Dot(currentEdge, checkEdge)) };
+
+					// If the angle between these edges is negative, continue to the next edge
+					if (angle < FLT_EPSILON) continue;
+
+					// If no edge has been checked, or the new angle is smaller then the previous angle, save the current distance and current vertex index we are testing
+					if (previousAngle < FLT_EPSILON || previousAngle > angle)
+					{
+						previousAngle = angle;
+						currentCheckIdx = checkVertexIdx;
+					}
+				}
+
+				// We now have a new triangle stored in currentV0Idx, currentV1Idx and currentCheckIdx
+
+				// If this the first triangle that is being created
+				if (isFirst)
+				{
+					// Replace the already created indices with the new indices
+					m_Mesh.useIndices[i] = indices[currentV0Idx];
+					m_Mesh.useIndices[i + 1] = indices[currentV1Idx];
+					m_Mesh.useIndices[i + 2] = indices[currentCheckIdx];
+
+					// Make sure the wind order of the indices is correct
+					OrderTriangleIndices(verticesRasterSpace, i, i + 1, i + 2);
+
+					// Add these 3 vertices to the vertex count
+					verticesAdded += 3;
+
+					// Make sure all new triangles are added extra
+					isFirst = false;
+				}
+				else
+				{
+					// A brand new triangle has been created
+
+					// Add the indices of this triangle to the back of the indices list
+					m_Mesh.useIndices.push_back(indices[currentV0Idx]);
+					m_Mesh.useIndices.push_back(indices[currentV1Idx]);
+					m_Mesh.useIndices.push_back(indices[currentCheckIdx]);
+
+					// Make sure the wind order of the indices is correct
+					OrderTriangleIndices(verticesRasterSpace, m_Mesh.useIndices.size() - 3, m_Mesh.useIndices.size() - 2, m_Mesh.useIndices.size() - 1);
+
+					// Only one new vertex has been added, so add 1 to the vertex count
+					++verticesAdded;
+				}
+
+				// Set the current edge vertex to the last tested vertex
+				currentV1Idx = currentCheckIdx;
+				// Reset the angle to 0
+				previousAngle = 0;
+			}
+		}
+	}
+#endif
 
 	// Depending on the topology of the mesh, use indices differently
 	switch (m_Mesh.primitiveTopology)
 	{
 	case PrimitiveTopology::TriangleList:
 		// For each triangle
-		for (int curStartVertexIdx{}; curStartVertexIdx < m_Mesh.indices.size(); curStartVertexIdx += 3)
+		for (int curStartVertexIdx{}; curStartVertexIdx < m_Mesh.useIndices.size(); curStartVertexIdx += 3)
 		{
-			RenderTriangle(m_Mesh, verticesRaster, curStartVertexIdx, false);
+			RenderTriangle(m_Mesh, verticesRasterSpace, curStartVertexIdx, false);
 		}
 		break;
 	case PrimitiveTopology::TriangleStrip:
 		// For each triangle
 		for (int curStartVertexIdx{}; curStartVertexIdx < m_Mesh.indices.size() - 2; ++curStartVertexIdx)
 		{
-			RenderTriangle(m_Mesh, verticesRaster, curStartVertexIdx, curStartVertexIdx % 2);
+			RenderTriangle(m_Mesh, verticesRasterSpace, curStartVertexIdx, curStartVertexIdx % 2);
 		}
 		break;
 	}
@@ -173,9 +505,9 @@ void Renderer::VertexTransformationFunction()
 void dae::Renderer::RenderTriangle(const Mesh& mesh, const std::vector<Vector2>& rasterVertices, int curVertexIdx, bool swapVertices) const
 {
 	// Calcalate the indexes of the vertices on this triangle
-	const uint32_t vertexIdx0{ mesh.indices[curVertexIdx] };
-	const uint32_t vertexIdx1{ mesh.indices[curVertexIdx + 1 * !swapVertices + 2 * swapVertices] };
-	const uint32_t vertexIdx2{ mesh.indices[curVertexIdx + 2 * !swapVertices + 1 * swapVertices] };
+	const uint32_t vertexIdx0{ mesh.useIndices[curVertexIdx] };
+	const uint32_t vertexIdx1{ mesh.useIndices[curVertexIdx + 1 * !swapVertices + 2 * swapVertices] };
+	const uint32_t vertexIdx2{ mesh.useIndices[curVertexIdx + 2 * !swapVertices + 1 * swapVertices] };
 
 	// If a triangle has the same vertex twice
 	// Or if a one of the vertices is outside the frustum
@@ -221,6 +553,7 @@ void dae::Renderer::RenderTriangle(const Mesh& mesh, const std::vector<Vector2>&
 			const int pixelIdx{ px + py * m_Width };
 			const Vector2 curPixel{ static_cast<float>(px), static_cast<float>(py) };
 
+			// If only the bounding box should be rendered, do no triangle checks, just display a white color
 			if (m_RendererState == RendererState::BoundingBox)
 			{
 				m_pBackBufferPixels[pixelIdx] = SDL_MapRGB(m_pBackBuffer->format,
@@ -311,6 +644,7 @@ void dae::Renderer::RenderTriangle(const Mesh& mesh, const std::vector<Vector2>&
 						* interpolatedWDepth
 				}.Normalized();
 
+				// Calculate the view direction at this pixel
 				pixelInfo.viewDirection =
 				Vector3{
 					(weightV0 * mesh.vertices_out[vertexIdx0].viewDirection / mesh.vertices_out[vertexIdx0].position.w +
@@ -324,14 +658,15 @@ void dae::Renderer::RenderTriangle(const Mesh& mesh, const std::vector<Vector2>&
 			case RendererState::Depth:
 			{
 				// Remap the Z depth
-				const float depthColor{ Remap(interpolatedZDepth, 0.985f, 1.0f) };
+				const float depthColor{ Remap(interpolatedZDepth, 0.997f, 1.0f) };
 
-				// Set the color to showcase the depth
+				// Set the color of the current pixel to showcase the depth
 				pixelInfo.color = { depthColor, depthColor, depthColor };
 				break;
 			}
 			}
 
+			// Calculate the shading at this pixel and display it on screen
 			PixelShading(px + (py * m_Width), pixelInfo);
 		}
 	}
@@ -351,66 +686,94 @@ void dae::Renderer::ResetDepthBuffer() const
 
 void dae::Renderer::PixelShading(int pixelIdx, const Vertex_Out& pixelInfo) const
 {
+	// The normal that should be used in calculations
 	Vector3 useNormal{ pixelInfo.normal };
 
+	// If the normal map is active
 	if (m_IsNormalMapActive)
 	{
+		// Calculate the binormal in this pixel
 		Vector3 binormal = Vector3::Cross(pixelInfo.normal, pixelInfo.tangent);
+
+		// Create a matrix using the tangent, normal and binormal
 		Matrix tangentSpaceAxis = Matrix{ pixelInfo.tangent, binormal, pixelInfo.normal, Vector3::Zero };
+
+		// Sample a color from the normal map and clamp it between -1 and 1
 		ColorRGB currentNormalMap{ 2.0f * m_pNormalTexture->Sample(pixelInfo.uv) - ColorRGB{ 1.0f, 1.0f, 1.0f } };
+
+		// Make a vector3 of the colorRGB object
 		Vector3 normalMapSample{ currentNormalMap.r, currentNormalMap.g, currentNormalMap.b };
+
+		// Transform the normal map value using the calculated matrix of this pixel
 		useNormal = tangentSpaceAxis.TransformVector(normalMapSample);
 	}
 
+	// Create the light data
 	Vector3 lightDirection{ 0.577f, -0.577f, 0.577f };
 	lightDirection.Normalize();
 	const float lightIntensity{ 7.0f };
 	const float specularShininess{ 25.0f };
 
+	// The final color that will be rendered
 	ColorRGB finalColor{};
 
+	// Depending on the rendering state, do other things
 	switch (m_RendererState)
 	{
 	case RendererState::Default:
 	{
+		// Calculate the observed area in this pixel
 		const float observedArea{ Vector3::DotClamped(useNormal.Normalized(), -lightDirection.Normalized()) };
-		const ColorRGB ambientColor{ 0.025f, 0.025f, 0.025f };
 
+		// Depending on the lighting mode, different shading should be applied
 		switch (m_LightingMode)
 		{
 		case dae::Renderer::LightingMode::Combined:
 		{
+			// Calculate the lambert shader
 			const ColorRGB lambert{ LightingUtils::Lambert(1.0f, m_pDiffuseTexture->Sample(pixelInfo.uv)) };
+			// Calculate the phong exponent
 			const float specularExp{ specularShininess * m_pGlossinessTexture->Sample(pixelInfo.uv).r };
+			// Calculate the phong shader
 			const ColorRGB specular{ m_pSpecularTexture->Sample(pixelInfo.uv) * LightingUtils::Phong(1.0f, specularExp, -lightDirection, pixelInfo.viewDirection, useNormal) };
-			finalColor += lightIntensity * observedArea * lambert + specular;
+
+			// Lambert + Phong + ObservedArea
+			finalColor += (lightIntensity * lambert + specular) * observedArea;
 			break;
 		}
 		case dae::Renderer::LightingMode::ObservedArea:
 		{
+			// Only show the calculated observed area
 			finalColor += ColorRGB{ observedArea, observedArea, observedArea };
 			break;
 		}
 		case dae::Renderer::LightingMode::Diffuse:
 		{
+			// Calculate the lambert shader and display it on screen together with the observed area
 			finalColor += lightIntensity * observedArea * LightingUtils::Lambert(1.0f, m_pDiffuseTexture->Sample(pixelInfo.uv));
 			break;
 		}
 		case dae::Renderer::LightingMode::Specular:
 		{
+			// Calculate the phong exponent
 			const float specularExp{ specularShininess * m_pGlossinessTexture->Sample(pixelInfo.uv).r };
+			// Calculate the phong shader
 			const ColorRGB specular{ m_pSpecularTexture->Sample(pixelInfo.uv) * LightingUtils::Phong(1.0f, specularExp, -lightDirection, pixelInfo.viewDirection, useNormal) };
+			// Phong + observed area
 			finalColor += specular * observedArea;
 			break;
 		}
 		}
 
+		// Create the ambient color	and add it to the final color
+		const ColorRGB ambientColor{ 0.025f, 0.025f, 0.025f };
 		finalColor += ambientColor;
 
 		break;
 	}
 	case RendererState::Depth:
 	{
+		// Only render the depth which is saved in the color attribute of the pixel info
 		finalColor += pixelInfo.color;
 		break;
 	}
@@ -425,6 +788,89 @@ void dae::Renderer::PixelShading(int pixelIdx, const Vertex_Out& pixelInfo) cons
 		static_cast<uint8_t>(finalColor.b * 255));
 }
 
+inline Vector2 dae::Renderer::CalculateNDCToRaster(const Vector3& ndcVertex) const
+{
+	return Vector2
+	{
+		(ndcVertex.x + 1) / 2.0f * m_Width,
+		(1.0f - ndcVertex.y) / 2.0f * m_Height
+	};
+}
+
+inline Vector3 dae::Renderer::CalculateRasterToNDC(const Vector2& rasterVertex, float interpolatedZ) const
+{
+	return Vector3
+	{
+		(rasterVertex.x / m_Width * 2.0f) - 1.0f,
+		-((rasterVertex.y / m_Height * 2.0f) - 1.0f),
+		interpolatedZ
+	};
+}
+
+inline void dae::Renderer::OrderTriangleIndices(const std::vector<Vector2>& rasterVertices, int i0, int i1, int i2)
+{
+	// Create of all the indices so we can swap them
+	std::vector<unsigned int> indices
+	{
+		m_Mesh.useIndices[i0],
+		m_Mesh.useIndices[i1],
+		m_Mesh.useIndices[i2]
+	};
+
+	// The index of the highest vertex
+	int highestOutputIdx{};
+	
+	// The lowest X value and highest Y value found
+	float lowestX{ FLT_EPSILON };
+	float highestY{ 0 };
+
+	// Find for all verices the most top left vertex
+	for (int vertexIdx{}; vertexIdx < indices.size(); ++vertexIdx)
+	{
+		// If the current vertex is higher or equally high then the previously found Y value
+		if (rasterVertices[indices[vertexIdx]].y >= highestY)
+		{
+			// If the current vertex is equally high then the previously found Y value
+			if (rasterVertices[indices[vertexIdx]].y == highestY)
+			{
+				// If the current vertex is more to the left then the previously found X value
+				if (rasterVertices[indices[vertexIdx]].x < lowestX)
+				{
+					// Save the current vertex index and its x and y value
+					highestOutputIdx = vertexIdx;
+					lowestX = rasterVertices[indices[vertexIdx]].x;
+					highestY = rasterVertices[indices[vertexIdx]].y;
+				}
+			}
+			else
+			{
+				// If the current vertex higher then the previously found Y value
+				// Save the current vertex index and its x and y value
+				highestOutputIdx = vertexIdx;
+				lowestX = rasterVertices[indices[vertexIdx]].x;
+				highestY = rasterVertices[indices[vertexIdx]].y;
+			}
+		}
+	}
+	// Swap the indice at index 0 with the indice that has the most top left vertex
+	std::swap(indices[highestOutputIdx], indices[0]);
+
+	// Create 2 edges of the triangle
+	const Vector2 edge01{ rasterVertices[indices[1]] - rasterVertices[indices[0]] };
+	const Vector2 edge12{ rasterVertices[indices[2]] - rasterVertices[indices[1]] };
+
+	// If the area of this triangle is negative, swap the two other indices
+	if (Vector2::Cross(edge01, edge12) < 0)
+	{
+		std::swap(indices[1], indices[2]);
+	}
+
+	// Replace the current indices with the swapped indices
+	m_Mesh.useIndices[i0] = indices[0];
+	m_Mesh.useIndices[i1] = indices[1];
+	m_Mesh.useIndices[i2] = indices[2];
+}
+
 bool Renderer::SaveBufferToImage() const
 {
 	return SDL_SaveBMP(m_pBackBuffer, "Rasterizer_ColorBuffer.bmp");
@@ -432,10 +878,14 @@ bool Renderer::SaveBufferToImage() const
 
 void dae::Renderer::InitMesh()
 {
+	// Retrieve the vertices and indices from the obj file
 	Utils::ParseOBJ("Resources/vehicle.obj", m_Mesh.vertices, m_Mesh.indices);
 
+	// Create the position, rotation and scaling for the new mesh
 	const Vector3 position{ m_Camera.origin + Vector3{ 0.0f, 0.0f, 50.0f } };
 	const Vector3 rotation{ };
 	const Vector3 scale{ Vector3{ 1.0f, 1.0f, 1.0f } };
+
+	// Create the world matrix using the above attributes
 	m_Mesh.worldMatrix = Matrix::CreateScale(scale) * Matrix::CreateRotation(rotation) * Matrix::CreateTranslation(position);
 }

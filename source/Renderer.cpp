@@ -112,20 +112,12 @@ void Renderer::Render()
 		const bool isV1InFrustum{ !m_Camera.IsOutsideFrustum(m_Mesh.vertices_out[vertexIdx1].position) };
 		const bool isV2InFrustum{ !m_Camera.IsOutsideFrustum(m_Mesh.vertices_out[vertexIdx2].position) };
 
-		// Retrieve if the triangle is inside or outside the frustum (completely)
-		const bool isTriangleInFrustum{ isV0InFrustum && isV1InFrustum && isV2InFrustum };
-		const bool isTriangleOutFrustum{ !isV0InFrustum && !isV1InFrustum && !isV2InFrustum };
-
 		// If the triangle is completely inside or completely outside the frustum, continue to the next triangle
-		if (isTriangleOutFrustum || isTriangleInFrustum)
-			continue;
+		if (isV0InFrustum && isV1InFrustum && isV2InFrustum) continue;
 
 		// A list of all the vertices when clipped
 		std::vector<Vertex_Out> outputVertexList{ m_Mesh.vertices_out[vertexIdx0], m_Mesh.vertices_out[vertexIdx1], m_Mesh.vertices_out[vertexIdx2] };
 		std::vector<Vector2> outputList{ verticesRasterSpace[vertexIdx0], verticesRasterSpace[vertexIdx1], verticesRasterSpace[vertexIdx2] };
-		
-		// A check to make sure a corner only gets added once
-		bool hasAddedCorner{};
 
 		// For each point of the screen
 		for (int rasterIdx{}; rasterIdx < rasterVertices.size(); ++rasterIdx)
@@ -145,14 +137,20 @@ void Renderer::Render()
 			for (int edgeIdx{}; edgeIdx < inputList.size(); ++edgeIdx)
 			{
 				// Calculate the points on the edge
-				Vector2 prevPoint{ inputList[edgeIdx] };
-				Vector2 curPoint{ inputList[(edgeIdx + 1) % inputList.size()] };
+				const Vector2 prevPoint{ inputList[edgeIdx] };
+				const Vector2 curPoint{ inputList[(edgeIdx + 1) % inputList.size()] };
 
 				// Calculate the intersection point of the current edge of the triangle and the current edge of the screen
 				Vector2 intersectPoint{ GeometryUtils::GetIntersectPoint(prevPoint, curPoint, edgeStart, edgeEnd) };
-				// Clamp the intersection point to make sure it doesn't go out of the frustum
-				intersectPoint.x = std::clamp(intersectPoint.x, 0.0f, static_cast<float>(m_Width));
-				intersectPoint.y = std::clamp(intersectPoint.y, 0.0f, static_cast<float>(m_Height));
+
+				// If the intersection point is within a margin from the screen, clamp the intersection point to the edge of the screen
+				const float margin{ 1.0f };
+				if (intersectPoint.x > -margin && intersectPoint.y > -margin && intersectPoint.x < m_Width + margin && intersectPoint.y < m_Height + margin)
+				{
+					// Clamp the intersection point to make sure it doesn't go out of the frustum
+					intersectPoint.x = std::clamp(intersectPoint.x, 0.0f, static_cast<float>(m_Width));
+					intersectPoint.y = std::clamp(intersectPoint.y, 0.0f, static_cast<float>(m_Height));
+				}
 
 				// Calculate if the two points of the triangle edge are on screen or not
 				const bool curPointInsideRaster{ Vector2::Cross(edge, Vector2{ edgeStart, curPoint}) >= 0 };
@@ -170,9 +168,9 @@ void Renderer::Render()
 						outputList.push_back(intersectPoint);
 
 						// Calculate the interpolating distances
-						const float totalDistance{ (curPoint - prevPoint).Magnitude() };
 						const float prevDistance{ (curPoint - intersectPoint).Magnitude() };
 						const float curDistance{ (intersectPoint - prevPoint).Magnitude() };
+						const float totalDistance{ curDistance + prevDistance };
 
 						// Calculate the interpolated vertex
 						Vertex_Out newVertex{};
@@ -201,9 +199,9 @@ void Renderer::Render()
 					outputList.push_back(intersectPoint);
 
 					// Calculate the interpolating distances
-					const float totalDistance{ (curPoint - prevPoint).Magnitude() };
 					const float prevDistance{ (curPoint - intersectPoint).Magnitude() };
 					const float curDistance{ (intersectPoint - prevPoint).Magnitude() };
+					const float totalDistance{ curDistance + prevDistance };
 
 					// Calculate the interpolated vertex
 					Vertex_Out newVertex{};
@@ -221,56 +219,10 @@ void Renderer::Render()
 						+ inputVertexList[edgeIdx].position.w * prevDistance / totalDistance;
 					outputVertexList.push_back(newVertex);
 				}
-				else if (!hasAddedCorner)
-				{
-					// None of the points is on screen, so try to add a corner
-
-					// Find the closest corner to one of both points
-					Vector2 closestCorner{};
-					float closestDistance{ FLT_MAX };
-
-					for (const Vector2& corner : rasterVertices)
-					{
-						float cornerDistance{ (corner - prevPoint).SqrMagnitude() };
-						if (cornerDistance < closestDistance)
-							closestCorner = corner;
-
-						cornerDistance = (corner - curPoint).SqrMagnitude();
-						if (cornerDistance < closestDistance)
-							closestCorner = corner;
-					}
-
-					// If the closest corner is inside the triangle, add it to the output
-					if (GeometryUtils::IsInTriangle(verticesRasterSpace[vertexIdx0], verticesRasterSpace[vertexIdx1], verticesRasterSpace[vertexIdx2], closestCorner))
-					{
-						outputList.push_back(closestCorner);
-						
-						// Calculate the interpolating distances
-						const float prevDistance{ (curPoint - closestCorner).Magnitude() };
-						const float curDistance{ (closestCorner - prevPoint).Magnitude() };
-						const float totalDistance{ prevDistance + curDistance };
-
-						// Calculate the interpolated vertex
-						Vertex_Out newVertex{};
-						newVertex.uv = inputVertexList[(edgeIdx + 1) % inputList.size()].uv * curDistance / totalDistance
-							+ inputVertexList[edgeIdx].uv * prevDistance / totalDistance;
-						newVertex.normal = inputVertexList[(edgeIdx + 1) % inputList.size()].normal * curDistance / totalDistance
-							+ inputVertexList[edgeIdx].normal * prevDistance / totalDistance;
-						newVertex.tangent = inputVertexList[(edgeIdx + 1) % inputList.size()].tangent * curDistance / totalDistance
-							+ inputVertexList[edgeIdx].tangent * prevDistance / totalDistance;
-						newVertex.viewDirection = inputVertexList[(edgeIdx + 1) % inputList.size()].viewDirection * curDistance / totalDistance
-							+ inputVertexList[edgeIdx].viewDirection * prevDistance / totalDistance;
-						newVertex.position.z = inputVertexList[(edgeIdx + 1) % inputList.size()].position.z * curDistance / totalDistance
-							+ inputVertexList[edgeIdx].position.z * prevDistance / totalDistance;
-						newVertex.position.w = inputVertexList[(edgeIdx + 1) % inputList.size()].position.w * curDistance / totalDistance
-							+ inputVertexList[edgeIdx].position.w * prevDistance / totalDistance;
-						outputVertexList.push_back(newVertex);
-
-						hasAddedCorner = true;
-					}
-				}
 			}
 		}
+
+		if (outputList.size() < 3) continue;
 
 		// Replace the already created raster vertices with the first 3 raster vertices in the output list
 		verticesRasterSpace[i] = outputList[0];
@@ -402,7 +354,8 @@ void Renderer::Render()
 					m_Mesh.useIndices.push_back(indices[currentCheckIdx]);
 
 					// Make sure the wind order of the indices is correct
-					OrderTriangleIndices(verticesRasterSpace, m_Mesh.useIndices.size() - 3, m_Mesh.useIndices.size() - 2, m_Mesh.useIndices.size() - 1);
+					int indicesSizeInt{ static_cast<int>(m_Mesh.useIndices.size()) };
+					OrderTriangleIndices(verticesRasterSpace, indicesSizeInt - 3, indicesSizeInt - 2, indicesSizeInt - 1);
 
 					// Only one new vertex has been added, so add 1 to the vertex count
 					++verticesAdded;
@@ -532,6 +485,9 @@ void dae::Renderer::RenderTriangle(const Mesh& mesh, const std::vector<Vector2>&
 
 	// Calculate the area of the current triangle
 	const float fullTriangleArea{ Vector2::Cross(edge01, edge12) };
+
+	// If the triangle area is 0 or NaN, continue to the next triangle
+	if (fullTriangleArea < FLT_EPSILON || isnan(fullTriangleArea)) return;
 
 	// Calculate the bounding box of this triangle
 	Vector2 minBoundingBox{ Vector2::Min(v0, Vector2::Min(v1, v2)) };

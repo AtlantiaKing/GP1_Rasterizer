@@ -136,15 +136,18 @@ void Renderer::Render()
 			// For each edge on the triangle
 			for (int edgeIdx{}; edgeIdx < inputList.size(); ++edgeIdx)
 			{
+				const int prevIndex{ edgeIdx };
+				const int curIndex{ static_cast<int>((edgeIdx + 1) % inputList.size()) };
+
 				// Calculate the points on the edge
-				const Vector2 prevPoint{ inputList[edgeIdx] };
-				const Vector2 curPoint{ inputList[(edgeIdx + 1) % inputList.size()] };
+				const Vector2 prevPoint{ inputList[prevIndex] };
+				const Vector2 curPoint{ inputList[curIndex] };
 
 				// Calculate the intersection point of the current edge of the triangle and the current edge of the screen
 				Vector2 intersectPoint{ GeometryUtils::GetIntersectPoint(prevPoint, curPoint, edgeStart, edgeEnd) };
 
 				// If the intersection point is within a margin from the screen, clamp the intersection point to the edge of the screen
-				const float margin{ 1.0f };
+				const float margin{ 0.01f };
 				if (intersectPoint.x > -margin && intersectPoint.y > -margin && intersectPoint.x < m_Width + margin && intersectPoint.y < m_Height + margin)
 				{
 					// Clamp the intersection point to make sure it doesn't go out of the frustum
@@ -174,24 +177,24 @@ void Renderer::Render()
 
 						// Calculate the interpolated vertex
 						Vertex_Out newVertex{};
-						newVertex.uv = inputVertexList[(edgeIdx + 1) % inputList.size()].uv * curDistance / totalDistance
-							+ inputVertexList[edgeIdx].uv * prevDistance / totalDistance;
-						newVertex.normal = inputVertexList[(edgeIdx + 1) % inputList.size()].normal * curDistance / totalDistance
-							+ inputVertexList[edgeIdx].normal * prevDistance / totalDistance;
-						newVertex.tangent = inputVertexList[(edgeIdx + 1) % inputList.size()].tangent * curDistance / totalDistance
-							+ inputVertexList[edgeIdx].tangent * prevDistance / totalDistance;
-						newVertex.viewDirection = inputVertexList[(edgeIdx + 1) % inputList.size()].viewDirection * curDistance / totalDistance
-							+ inputVertexList[edgeIdx].viewDirection * prevDistance / totalDistance;
-						newVertex.position.z = inputVertexList[(edgeIdx + 1) % inputList.size()].position.z * curDistance / totalDistance
-							+ inputVertexList[edgeIdx].position.z * prevDistance / totalDistance;
-						newVertex.position.w = inputVertexList[(edgeIdx + 1) % inputList.size()].position.w * curDistance / totalDistance
-							+ inputVertexList[edgeIdx].position.w * prevDistance / totalDistance;
+						newVertex.uv = inputVertexList[curIndex].uv * curDistance / totalDistance
+							+ inputVertexList[prevIndex].uv * prevDistance / totalDistance;
+						newVertex.normal = (inputVertexList[curIndex].normal * curDistance / totalDistance
+							+ inputVertexList[prevIndex].normal * prevDistance / totalDistance).Normalized();
+						newVertex.tangent = (inputVertexList[curIndex].tangent * curDistance / totalDistance
+							+ inputVertexList[prevIndex].tangent * prevDistance / totalDistance).Normalized();
+						newVertex.viewDirection = (inputVertexList[curIndex].viewDirection * curDistance / totalDistance
+							+ inputVertexList[prevIndex].viewDirection * prevDistance / totalDistance).Normalized();
+						newVertex.position.z = inputVertexList[curIndex].position.z * curDistance / totalDistance
+							+ inputVertexList[prevIndex].position.z * prevDistance / totalDistance;
+						newVertex.position.w = inputVertexList[curIndex].position.w * curDistance / totalDistance
+							+ inputVertexList[prevIndex].position.w * prevDistance / totalDistance;
 						outputVertexList.push_back(newVertex);
 					}
 
 					//The current point is on screen, so add this point to the output
 					outputList.push_back(curPoint);
-					outputVertexList.push_back(inputVertexList[(edgeIdx + 1) % inputList.size()]);
+					outputVertexList.push_back(inputVertexList[curIndex]);
 				}
 				else if (prevPointInsideRaster)
 				{
@@ -205,18 +208,18 @@ void Renderer::Render()
 
 					// Calculate the interpolated vertex
 					Vertex_Out newVertex{};
-					newVertex.uv = inputVertexList[(edgeIdx + 1) % inputList.size()].uv * curDistance / totalDistance
-						+ inputVertexList[edgeIdx].uv * prevDistance / totalDistance;
-					newVertex.normal = inputVertexList[(edgeIdx + 1) % inputList.size()].normal * curDistance / totalDistance
-						+ inputVertexList[edgeIdx].normal * prevDistance / totalDistance;
-					newVertex.tangent = inputVertexList[(edgeIdx + 1) % inputList.size()].tangent * curDistance / totalDistance
-						+ inputVertexList[edgeIdx].tangent * prevDistance / totalDistance;
-					newVertex.viewDirection = inputVertexList[(edgeIdx + 1) % inputList.size()].viewDirection * curDistance / totalDistance
-						+ inputVertexList[edgeIdx].viewDirection * prevDistance / totalDistance;
-					newVertex.position.z = inputVertexList[(edgeIdx + 1) % inputList.size()].position.z * curDistance / totalDistance
-						+ inputVertexList[edgeIdx].position.z * prevDistance / totalDistance;
-					newVertex.position.w = inputVertexList[(edgeIdx + 1) % inputList.size()].position.w * curDistance / totalDistance
-						+ inputVertexList[edgeIdx].position.w * prevDistance / totalDistance;
+					newVertex.uv = inputVertexList[curIndex].uv * curDistance / totalDistance
+						+ inputVertexList[prevIndex].uv * prevDistance / totalDistance;
+					newVertex.normal = (inputVertexList[curIndex].normal * curDistance / totalDistance
+						+ inputVertexList[prevIndex].normal * prevDistance / totalDistance).Normalized();
+					newVertex.tangent = (inputVertexList[curIndex].tangent * curDistance / totalDistance
+						+ inputVertexList[prevIndex].tangent * prevDistance / totalDistance).Normalized();
+					newVertex.viewDirection = (inputVertexList[curIndex].viewDirection * curDistance / totalDistance
+						+ inputVertexList[prevIndex].viewDirection * prevDistance / totalDistance).Normalized();
+					newVertex.position.z = inputVertexList[curIndex].position.z * curDistance / totalDistance
+						+ inputVertexList[prevIndex].position.z * prevDistance / totalDistance;
+					newVertex.position.w = inputVertexList[curIndex].position.w * curDistance / totalDistance
+						+ inputVertexList[prevIndex].position.w * prevDistance / totalDistance;
 					outputVertexList.push_back(newVertex);
 				}
 			}

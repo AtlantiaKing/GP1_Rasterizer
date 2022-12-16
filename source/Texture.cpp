@@ -1,6 +1,7 @@
 #include "Texture.h"
 #include "Vector2.h"
 #include <SDL_image.h>
+#include <algorithm>
 
 namespace dae
 {
@@ -33,8 +34,8 @@ namespace dae
 		Uint8 g{};
 		Uint8 b{};
 
-		const int x{ static_cast<int>(uv.x * m_pSurface->w) };
-		const int y{ static_cast<int>(uv.y * m_pSurface->h) };
+		const int x{ static_cast<int>(std::clamp(uv.x, 0.0f, 1.0f) * m_pSurface->w) };
+		const int y{ static_cast<int>(std::clamp(uv.y, 0.0f, 1.0f) * m_pSurface->h) };
 
 		// Calculate the current pixelIdx on the texture
 		const Uint32 pixelIdx{ m_pSurfacePixels[x + y * m_pSurface->w] };
